@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aura | Sovereign Telemetry HUD</title>
+    <link rel="stylesheet" href="telemetry.css">
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        .consciousness-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+
+        .stat-box {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(0, 255, 255, 0.1);
+            padding: 8px;
+            text-align: center;
+        }
+
+        .stat-label {
+            display: block;
+            font-size: 0.7em;
+            color: #888;
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            display: block;
+            font-size: 1.1em;
+            color: #00ffaa;
+            font-weight: bold;
+        }
+
+        .narrative-box {
+            font-size: 0.8em;
+            color: #ccc;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 10px;
+            border-left: 2px solid #b537f2;
+            height: 80px;
+            overflow-y: auto;
+            margin-bottom: 15px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="hud-container">
+
+        <aside class="panel left-panel">
+            <div class="panel-header">COGNITIVE STREAM</div>
+            <div id="monologue-feed" class="terminal-feed">
+                <div class="log-entry system">[SYSTEM] Aura Sovereign Engine Initialized...</div>
+            </div>
+
+            <div class="panel-header sub-header">ACTIVE SKILLS</div>
+            <div id="skill-badges" class="badge-container">
+                <div class="skill-badge idle">Awaiting execution...</div>
+            </div>
+        </aside>
+
+        <main class="panel center-panel">
+            <div class="orb-container">
+                <div id="voice-orb" class="voice-orb state-listening"></div>
+            </div>
+
+            <div class="subtitle-container">
+                <p id="aura-subtitle" class="subtitle-text fade-out"></p>
+            </div>
+        </main>
+
+        <aside class="panel right-panel">
+            <div class="panel-header">LIQUID STATE TELEMETRY</div>
+            <div class="telemetry-gauges">
+                <div class="gauge-row">
+                    <span>Energy</span>
+                    <div class="progress-bar">
+                        <div id="bar-energy" class="fill fill-cyan" style="width: 85%;"></div>
+                    </div>
+                </div>
+                <div class="gauge-row">
+                    <span>Curiosity</span>
+                    <div class="progress-bar">
+                        <div id="bar-curiosity" class="fill fill-purple" style="width: 60%;"></div>
+                    </div>
+                </div>
+                <div class="gauge-row">
+                    <span>Frustration</span>
+                    <div class="progress-bar">
+                        <div id="bar-frustration" class="fill fill-red" style="width: 15%;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-header sub-header">CONSCIOUSNESS STATE</div>
+            <div class="consciousness-grid">
+                <div class="stat-box">
+                    <span class="stat-label">GWT Winner</span>
+                    <span id="gwt-winner" class="stat-value">--</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Coherence</span>
+                    <span id="stat-coherence" class="stat-value">--</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Vitality</span>
+                    <span id="stat-vitality" class="stat-value">--</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Surprise</span>
+                    <span id="stat-surprise" class="stat-value">--</span>
+                </div>
+            </div>
+
+            <div class="panel-header sub-header">TEMPORAL NARRATIVE</div>
+            <div id="narrative-box" class="narrative-box">
+                waiting for active narrative...
+            </div>
+
+            <div class="panel-header sub-header">EPISTEMIC STATE (BELIEF GRAPH)</div>
+            <div id="belief-graph-container" class="network-graph"></div>
+        </aside>
+
+    </div>
+
+    <script src="telemetry.js"></script>
+</body>
+
+</html>

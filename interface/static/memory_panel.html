@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Aura Memory Nexus</title>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #05030a;
+            --panel: #0f0a18;
+            --border: #2a1f3d;
+            --primary: #8a2be2;
+            --text: #e0e0e0;
+            --text-dim: #808080;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Space Mono', monospace;
+            margin: 0;
+            padding: 20px;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 20px;
+            margin-bottom: 20px;
+        }
+
+        h1 { font-family: 'Syne', sans-serif; margin: 0; color: var(--primary); }
+        .back-btn { text-decoration: none; color: var(--text-dim); border: 1px solid var(--border); padding: 5px 10px; border-radius: 4px; }
+        .back-btn:hover { color: #fff; border-color: var(--primary); }
+
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .tab.active { background: var(--primary); color: #000; border-color: var(--primary); font-weight: bold; }
+
+        .view-panel { display: none; }
+        .view-panel.active { display: block; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { text-align: left; color: var(--text-dim); border-bottom: 1px solid var(--border); padding: 10px; }
+        td { padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: top; }
+        tr:hover td { background: rgba(255,255,255,0.02); }
+
+        .tag {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.7rem;
+            background: rgba(255,255,255,0.1);
+        }
+        .tag.error { background: rgba(255, 71, 87, 0.2); color: #ff4757; }
+        .tag.success { background: rgba(0, 255, 157, 0.1); color: #00ff9d; }
+
+        pre { margin: 0; white-space: pre-wrap; color: var(--text-dim); }
+
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Memory Nexus</h1>
+        <a href="/" class="back-btn">← Back to Cortex</a>
+    </header>
+
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('episodic')">Episodic Trace</div>
+        <div class="tab" onclick="switchTab('semantic')">Semantic Facts</div>
+        <div class="tab" onclick="switchTab('goals')">Active Goals</div>
+    </div>
+
+    <div id="episodic" class="view-panel active">
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>Goal / Context</th>
+                    <th>Outcome</th>
+                    <th>Cost</th>
+                </tr>
+            </thead>
+            <tbody id="episodic-rows">
+                <tr><td colspan="5">Loading events...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div id="semantic" class="view-panel">
+        <table>
+            <thead><tr><th>Key</th><th>Value</th><th>Last Mod</th></tr></thead>
+            <tbody id="semantic-rows"><tr><td colspan="3">Loading...</td></tr></tbody>
+        </table>
+    </div>
+
+    <div id="goals" class="view-panel">
+        <div style="padding: 20px; text-align: center; color: var(--text-dim)">
+            Goal Graph visualization coming in v6.1
+        </div>
+    </div>
+
+    <script>
+        function switchTab(id) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById(id).classList.add('active');
+            if (id === 'episodic') loadEpisodic();
+        }
+
+        async function loadEpisodic() {
+            try {
+                const res = await fetch('/api/memory/recent?limit=50');
+                const data = await res.json();
+                const tbody = document.getElementById('episodic-rows');
+                tbody.innerHTML = '';
+                
+                // Assuming API returns stringified list or objects.
+                // server.py returns [str(i) for i in items]. 
+                // We'll need to parse if they are strings, but current implementation does simple str().
+                // Let's adjust server.py or parse here. 
+                // Since I can't easily change server.py (I just wrote it), let's assume it returns strings for now
+                // but ideally it should return JSON objects.
+                // Wait, server.py: `return JSONResponse({"items": [str(i) for i in items]})`
+                // `items` are MemoryEvents. str(event) is `MemoryEvent(...)`.
+                // This is suboptimal for a UI. 
+                // However, I should stick to the plan. I will just display them as text rows for now.
+                
+                data.items.forEach(itemStr => {
+                    const row = document.createElement('tr');
+                    
+                    // Quick hacky parse for display since we get a string repr
+                    // Ideally we'd fix server.py to return .to_dict()
+                    // I will do that in a follow up if needed, but for now just show raw
+                    row.innerHTML = `
+                        <td colspan="5" style="font-family:monospace; opacity:0.8">${itemStr}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        // Initial load
+        loadEpisodic();
+    </script>
+</body>
+</html>

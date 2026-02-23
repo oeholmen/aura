@@ -1,0 +1,16 @@
+# requirements/ml.txt
+
+numpy>=1.26,<3.0
+scipy>=1.13
+torch>=2.3           # CPU build; GPU: follow PyTorch install guide
+transformers>=4.41
+diffusers>=0.27
+huggingface_hub>=0.23
+accelerate>=0.30
+datasets>=2.19
+chromadb>=0.5
+faiss-cpu>=1.8
+
+# macOS Metal acceleration (skipped on non-Apple)
+# mlx>=0.14 ; sys_platform == "darwin"
+# mlx-lm>=0.4 ; sys_platform == "darwin"

@@ -1,0 +1,7 @@
+# requirements/voice.txt
+
+sounddevice>=0.4
+faster-whisper>=1.0        # Local STT
+pyttsx3>=2.90              # Fallback TTS
+pyaudio>=0.2               # For raw audio if sounddevice unavailable
+playwright>=1.44           # Browser-based STT fallback

@@ -1,0 +1,25 @@
+# requirements/dev.txt
+
+# Testing
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-cov>=5.0
+faker>=25.0
+
+# Type checking
+mypy>=1.10
+types-PyYAML
+
+# Linting / formatting
+ruff>=0.5
+black>=24.0
+pre-commit>=3.7
+
+# Profiling / debugging
+pyinstrument>=4.6
+memray>=1.5          ; sys_platform != "win32"
+icecream>=2.1
+
+# Dev convenience
+ipython>=8.0
+watchdog>=4.0        # File watching for hot-reload scripts

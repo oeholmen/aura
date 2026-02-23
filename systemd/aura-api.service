@@ -1,0 +1,32 @@
+[Unit]
+Description=Aura Sovereign Agent API Server
+After=network.target ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=aura
+Group=aura
+WorkingDirectory=/opt/aura/autonomy_engine
+Environment=AURA_HOST=127.0.0.1
+Environment=AURA_PORT=8000
+Environment=AURA_ENV=production
+EnvironmentFile=-/opt/aura/.env
+ExecStart=/opt/aura/venv/bin/python3 -m uvicorn interface.server:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aura-api
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/aura/autonomy_engine/data /opt/aura/autonomy_engine/logs
+PrivateTmp=yes
+MemoryMax=4G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,106 @@
+{
+  "episodic": [
+    {
+      "type": "goal_execution",
+      "goal": "Ensure Persistence (Uplink)",
+      "outcome": {
+        "ok": true,
+        "summary": "Checkpoint created."
+      },
+      "cost": 0.1,
+      "t": 1769907129.537336
+    },
+    {
+      "type": "goal_execution",
+      "goal": "Ensure Persistence (Uplink)",
+      "outcome": {
+        "ok": true,
+        "summary": "Checkpoint created."
+      },
+      "cost": 0.1,
+      "t": 1769907131.665236
+    },
+    {
+      "type": "goal_execution",
+      "goal": "Ensure Persistence (Uplink)",
+      "outcome": {
+        "ok": true,
+        "summary": "Checkpoint created."
+      },
+      "cost": 0.1,
+      "t": 1769907133.762937
+    },
+    {
+      "type": "goal_execution",
+      "goal": "Ensure Persistence (Uplink)",
+      "outcome": {
+        "ok": true,
+        "summary": "Checkpoint created."
+      },
+      "cost": 0.1,
+      "t": 1769907135.8697941
+    },
+    {
+      "type": "goal_execution",
+      "goal": "Ensure Persistence (Uplink)",
+      "outcome": {
+        "ok": true,
+        "summary": "Checkpoint created."
+      },
+      "cost": 0.1,
+      "t": 1769907137.95985
+    },
+    {
+      "type": "goal_execution",
+      "goal": "Ensure Persistence (Uplink)",
+      "outcome": {
+        "ok": true,
+        "summary": "Checkpoint created."
+      },
+      "cost": 0.1,
+      "t": 1769907140.07429
+    },
+    {
+      "type": "goal_execution",
+      "goal": "Ensure Persistence (Uplink)",
+      "outcome": {
+        "ok": true,
+        "summary": "Checkpoint created."
+      },
+      "cost": 0.1,
+      "t": 1769907142.169009
+    },
+    {
+      "type": "goal_execution",
+      "goal": "Ensure Persistence (Uplink)",
+      "outcome": {
+        "ok": true,
+        "summary": "Checkpoint created."
+      },
+      "cost": 0.1,
+      "t": 1769907144.275177
+    },
+    {
+      "type": "goal_execution",
+      "goal": "Ensure Persistence (Uplink)",
+      "outcome": {
+        "ok": true,
+        "summary": "Checkpoint created."
+      },
+      "cost": 0.1,
+      "t": 1769907146.389211
+    },
+    {
+      "type": "goal_execution",
+      "goal": "Ensure Persistence (Uplink)",
+      "outcome": {
+        "ok": true,
+        "summary": "Checkpoint created."
+      },
+      "cost": 0.1,
+      "t": 1769907148.551101
+    }
+  ],
+  "semantic": {},
+  "goals": []
+}

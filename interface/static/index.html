@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#030005">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="/static/icon-192.png">
+    <title>AURA: INFINITY</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&display=swap"
+        rel="stylesheet">
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <link rel="manifest" href="/static/manifest.json?v=Zenith.Mobile.Fix.15.0">
+    <link rel="stylesheet" href="/static/aura.css?v=Zenith.Mobile.Fix.15.0">
+</head>
+
+<body>
+    <!-- ═══ HEADER ═══ -->
+    <header>
+        <div class="brand">
+            <div class="brand-icon"></div>
+            <span class="brand-title">AURA: INFINITY</span>
+            <span class="brand-ver" id="ui-ver"
+                style="display:flex; flex-direction:column; align-items:flex-start; line-height:1.2;"><span>Aura
+                    Infinity</span><span>v14.0.0-Zenith</span></span>
+        </div>
+        <div class="hud-stats">
+            <div class="hud-stat agency">AGENCY <strong id="hud-agency">--</strong></div>
+            <div class="hud-stat curiosity">CURIOSITY <strong id="hud-curiosity">--</strong></div>
+            <div class="hud-stat fixes">FIXES <strong id="hud-fixes">0</strong></div>
+            <div class="hud-stat beliefs">BELIEFS <strong id="hud-beliefs">0</strong></div>
+            <div class="hud-stat episodes">EPISODES <strong id="hud-episodes">0</strong></div>
+            <div class="hud-stat goals">GOALS <strong id="hud-goals">0</strong></div>
+            <div class="hud-stat autonomy" id="hud-autonomy">AUTONOMY <span class="pulsating status-ok">ON</span></div>
+            <div class="hud-stat stealth" id="hud-stealth">STEALTH <span class="pulsating status-ok">ON</span></div>
+            <div class="hud-stat unity" id="hud-unity">UNITY <span class="pulsating status-ok">ON</span></div>
+            <div class="hud-stat" id="hud-scratchpad">SCRATCHPAD <span class="pulsating status-ok">ON</span></div>
+            <div class="hud-stat" id="hud-forge">FORGE <span class="pulsating status-ok">ON</span></div>
+            <div class="hud-stat" id="hud-subconscious">SUBCONSCIOUS <span class="status-ok">IDLE</span></div>
+            <div class="hud-stat cycles">CYCLES <strong id="hud-cycles">0</strong></div>
+            <div class="hud-stat">UPTIME <strong id="hud-uptime">0s</strong></div>
+        </div>
+        <div class="hdr-actions">
+            <button class="hdr-btn" id="btn-apk" title="Download Mobile App"
+                onclick="window.location.href='/static/aura.apk'">↓ APK</button>
+            <button class="hdr-btn" id="btn-brain" title="Retry cognitive engine">◇ BRAIN</button>
+            <button class="hdr-btn" id="btn-src" title="Download source bundle">↓ SRC</button>
+            <button class="hdr-btn" id="btn-term" title="Toggle terminal">▸ TERM</button>
+            <button class="hdr-btn reboot" id="btn-reboot" title="Reboot Aura">⏻</button>
+        </div>
+    </header>
+
+    <!-- ═══ MAIN ═══ -->
+    <main>
+        <!-- Chat Column -->
+        <section class="chat-panel">
+            <div class="conn-banner" id="conn-banner">⚠ Connection lost — reconnecting…</div>
+            <div id="messages">
+                <div class="sys-box">
+                    Aura: Infinity online. Synchronizing cognitive drives...
+                </div>
+            </div>
+
+            <div class="voice-orb-wrap" id="voice-orb-wrap">
+                <div class="voice-orb" id="voice-orb"></div>
+                <span class="orb-label">VOICE MODE</span>
+            </div>
+
+            <div class="typing-indicator" id="typing-ind">
+                <span class="typing-dots"><span>●</span> <span>●</span> <span>●</span></span> Aura is thinking…
+            </div>
+
+            <div class="input-area">
+                <form class="input-bar" id="chat-form">
+                    <input type="text" id="chat-input" placeholder="Talk to Aura..." autocomplete="off">
+                    <button type="submit" class="input-btn">SEND</button>
+                    <button type="button" class="input-btn mic-btn" id="mic-btn" title="Toggle voice">
+                        <div id="voice-orb"></div>
+                        <div id="stop-icon" class="hidden">■</div>
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="tab-bar">
+                <button class="tab-btn active" data-tab="neural">
+                    <span class="tab-icon">◉</span> NEURAL
+                </button>
+                <button class="tab-btn" data-tab="telemetry">
+                    <span class="tab-icon">◆</span> TELEMETRY
+                </button>
+                <button class="tab-btn" data-tab="memory">
+                    <span class="tab-icon">◈</span> MEMORY
+                </button>
+                <button class="tab-btn" data-tab="skills">
+                    <span class="tab-icon">⚡</span> SKILLS
+                </button>
+            </div>
+            <div class="sidebar-body">
+                <!-- Neural Tab -->
+                <div id="pane-neural" class="tab-pane active">
+                    <div class="section-label">LIVE NEURAL FEED <div class="live-dot" id="neural-dot"></div>
+                    </div>
+                    <div class="bar-wrap">
+                        <div class="bar-fill neural" id="neural-bar"></div>
+                    </div>
+                    <div class="section-label">THOUGHT CARDS</div>
+                    <div id="neural-feed"></div>
+                </div>
+
+                <!-- Telemetry Tab -->
+                <div id="pane-telemetry" class="tab-pane">
+                    <div class="section-label">LIQUID STATE GAUGES</div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>ENERGY</span><span id="g-energy-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill energy" id="g-energy"></div>
+                        </div>
+                    </div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>CURIOSITY</span><span id="g-curiosity-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill curiosity" id="g-curiosity"></div>
+                        </div>
+                    </div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>FRUSTRATION</span><span id="g-frustration-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill frustration" id="g-frustration"></div>
+                        </div>
+                    </div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>CONFIDENCE</span><span id="g-confidence-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill confidence" id="g-confidence"></div>
+                        </div>
+                    </div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>INTEGRITY</span><span id="g-integrity-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill energy" id="g-integrity"></div>
+                        </div>
+                    </div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>PERSISTENCE</span><span id="g-persistence-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill confidence" id="g-persistence"></div>
+                        </div>
+                    </div>
+
+                    <div class="section-label">NEURAL DYNAMICS (V/A/D)</div>
+                    <div class="neural-dynamics-wrap">
+                        <canvas id="neural-vad-canvas" width="300" height="120"></canvas>
+                        <div class="vad-overlay">
+                            <span id="vad-v">V: 0.00</span>
+                            <span id="vad-a">A: 0.00</span>
+                            <span id="vad-d">D: 0.00</span>
+                        </div>
+                    </div>
+
+                    <div class="section-label">SOMATIC HARDWARE</div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>THERMAL LOAD</span><span id="s-thermal-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill energy" id="s-thermal"></div>
+                        </div>
+                    </div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>RESOURCE ANXIETY</span><span id="s-anxiety-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill frustration" id="s-anxiety"></div>
+                        </div>
+                    </div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>VITALITY</span><span id="s-vitality-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill energy" id="s-vitality"></div>
+                        </div>
+                    </div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>CONSCIENCE</span><span id="s-moral-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill confidence" id="s-moral"></div>
+                        </div>
+                    </div>
+                    <div class="gauge-row">
+                        <div class="gauge-label"><span>SOCIAL DEPTH</span><span id="s-social-val">--</span></div>
+                        <div class="gauge-bar">
+                            <div class="gauge-fill confidence" id="s-social"></div>
+                        </div>
+                    </div>
+
+                    <div class="consciousness-section section-label">CONSCIOUSNESS STATE</div>
+                    <div class="consciousness-grid">
+                        <div class="con-box"><span class="con-val" id="c-gwt">--</span><span class="con-lbl">GWT
+                                WINNER</span></div>
+                        <div class="con-box"><span class="con-val" id="c-coherence">--</span><span
+                                class="con-lbl">COHERENCE</span></div>
+                        <div class="con-box"><span class="con-val" id="c-vitality">--</span><span
+                                class="con-lbl">VITALITY</span></div>
+                        <div class="con-box"><span class="con-val" id="c-surprise">--</span><span
+                                class="con-lbl">SURPRISE</span></div>
+                        <div class="con-box"><span class="con-val" id="c-swarm">0</span><span
+                                class="con-lbl">SWARM</span></div>
+                    </div>
+
+                    <div class="section-label">TEMPORAL NARRATIVE</div>
+                    <div class="narrative-box" id="narrative">waiting for active narrative...</div>
+
+                    <div class="section-label">BELIEF GRAPH</div>
+                    <div id="belief-graph"></div>
+                </div>
+
+                <!-- Memory Tab -->
+                <div id="pane-memory" class="tab-pane">
+                    <div class="mem-sub-tabs">
+                        <button class="mem-sub-btn active" data-mem="episodic">EPISODIC</button>
+                        <button class="mem-sub-btn" data-mem="semantic">SEMANTIC</button>
+                        <button class="mem-sub-btn" data-mem="goals">GOALS</button>
+                    </div>
+                    <div class="mem-content" id="mem-content">
+                        <div class="mem-empty" id="mem-empty">🗂 No episodic memories yet</div>
+                    </div>
+                </div>
+
+                <!-- Skills Tab -->
+                <div id="pane-skills" class="tab-pane">
+                    <div class="section-label">REGISTERED SKILLS</div>
+                    <div id="skills-list">
+                        <div class="mem-empty">Loading skills...</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- Mobile Navigation Bar -->
+    <nav class="mobile-nav">
+        <button class="m-nav-btn active" data-m-tab="chat">
+            <span class="m-nav-icon">▣</span>
+            <span class="m-nav-lbl">CHAT</span>
+        </button>
+        <button class="m-nav-btn" data-m-tab="neural">
+            <span class="m-nav-icon">◉</span>
+            <span class="m-nav-lbl">NEURAL</span>
+        </button>
+        <button class="m-nav-btn" data-m-tab="telemetry">
+            <span class="m-nav-icon">◆</span>
+            <span class="m-nav-lbl">STATS</span>
+        </button>
+        <button class="m-nav-btn" data-m-tab="memory">
+            <span class="m-nav-icon">◈</span>
+            <span class="m-nav-lbl">MEM</span>
+        </button>
+        <a class="m-nav-btn m-app-btn" href="/static/aura.apk" download="aura.apk" title="Download Native APK">
+            <span class="m-nav-icon">⚡</span>
+            <span class="m-nav-lbl">DOWNLOAD</span>
+        </a>
+    </nav>
+    <script src="/static/aura.js?MEGA_SYNC_FINAL_v14_0_5"></script>
+</body>
+
+</html>

@@ -1,0 +1,792 @@
+"""Intelligent Planning Engine with Goal Decomposition and Validation.
+
+Features:
+1. LLM-based goal decomposition with structured output
+2. Tool validation and parameter inference
+3. Execution plan optimization
+4. Error recovery and fallback strategies
+5. Structured logging and metrics
+"""
+
+import hashlib
+import json
+import logging
+import re
+import time
+from collections import OrderedDict, defaultdict
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+logger = logging.getLogger("Kernel.Planner")
+
+
+class ToolType(Enum):
+    """Supported tool types with validation schemas."""
+
+    WEB_SEARCH = "web_search"
+    BROWSER_ACTION = "browser_action"
+    CODING = "coding"
+    FILE_OPERATION = "file_operation"
+    DATA_ANALYSIS = "data_analysis"
+    NATIVE_CHAT = "native_chat"
+    INTERACTIVE_SEARCH = "interactive_search"
+
+
+@dataclass
+class ToolSchema:
+    """Tool schema definition for validation."""
+
+    name: str
+    description: str
+    required_params: List[str]
+    optional_params: List[str] = field(default_factory=list)
+    param_schemas: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolCall:
+    """Structured tool call with validation."""
+
+    tool: str
+    params: Dict[str, Any]
+    output_var: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def __post_init__(self):
+        """Validate tool call structure."""
+        if not self.tool or not isinstance(self.tool, str):
+            raise ValueError("Tool name must be a non-empty string")
+        
+        if not isinstance(self.params, dict):
+            raise ValueError("Params must be a dictionary")
+        
+        if self.output_var and not isinstance(self.output_var, str):
+            raise ValueError("Output variable must be a string")
+    
+    def get_param(self, key: str, default: Any = None) -> Any:
+        """Safely get parameter value."""
+        return self.params.get(key, default)
+    
+    def validate(self, available_tools: Dict[str, ToolSchema]) -> List[str]:
+        """Validate tool call against schema."""
+        errors = []
+        
+        if self.tool not in available_tools:
+            errors.append(f"Unknown tool: {self.tool}")
+            return errors
+        
+        schema = available_tools[self.tool]
+        
+        # Check required parameters
+        for param in schema.required_params:
+            if param not in self.params:
+                errors.append(f"Missing required parameter: {param}")
+        
+        # Validate parameter types if schemas provided
+        for param, value in self.params.items():
+            if param in schema.param_schemas:
+                param_type = schema.param_schemas[param]
+                if not isinstance(value, param_type):
+                    errors.append(f"Parameter '{param}' should be {param_type}, got {type(value)}")
+        
+        return errors
+
+
+@dataclass
+class ExecutionPlan:
+    """Complete execution plan with metadata."""
+
+    goal: str
+    plan_steps: List[str]
+    tool_calls: List[ToolCall]
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+    plan_hash: str = None
+    
+    def __post_init__(self):
+        """Generate plan hash for deduplication."""
+        if self.plan_hash is None:
+            self.plan_hash = self._generate_hash()
+    
+    def _generate_hash(self) -> str:
+        """Generate hash for plan deduplication."""
+        plan_data = {
+            "goal": self.goal,
+            "plan_steps": self.plan_steps,
+            "tool_calls": [
+                {"tool": tc.tool, "params": tc.params}
+                for tc in self.tool_calls
+            ]
+        }
+        plan_str = json.dumps(plan_data, sort_keys=True)
+        return hashlib.sha256(plan_str.encode()).hexdigest()
+    
+    def is_valid(self) -> Tuple[bool, List[str]]:
+        """Validate plan structure."""
+        errors = []
+        
+        if not self.goal or not isinstance(self.goal, str):
+            errors.append("Goal must be a non-empty string")
+        
+        if not isinstance(self.plan_steps, list):
+            errors.append("Plan steps must be a list")
+        elif not all(isinstance(step, str) for step in self.plan_steps):
+            errors.append("All plan steps must be strings")
+        
+        if not isinstance(self.tool_calls, list):
+            errors.append("Tool calls must be a list")
+        elif not all(isinstance(tc, ToolCall) for tc in self.tool_calls):
+            errors.append("All tool calls must be ToolCall instances")
+        
+        return len(errors) == 0, errors
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "goal": self.goal,
+            "plan": self.plan_steps,
+            "tool_calls": [
+                {
+                    "tool": tc.tool,
+                    "params": tc.params,
+                    "output_var": tc.output_var,
+                    "metadata": tc.metadata
+                }
+                for tc in self.tool_calls
+            ],
+            "metadata": self.metadata,
+            "created_at": self.created_at,
+            "plan_hash": self.plan_hash
+        }
+
+
+class PlanCache:
+    """O(1) LRU cache for execution plans using OrderedDict."""
+    
+    def __init__(self, max_size: int = 100):
+        self.max_size = max_size
+        self.cache: OrderedDict[str, ExecutionPlan] = OrderedDict()
+    
+    def get(self, goal_hash: str) -> Optional[ExecutionPlan]:
+        """Get plan from cache, moving it to most-recent position."""
+        if goal_hash in self.cache:
+            self.cache.move_to_end(goal_hash)
+            return self.cache[goal_hash]
+        return None
+    
+    def put(self, goal_hash: str, plan: ExecutionPlan) -> None:
+        """Add plan to cache with O(1) LRU eviction."""
+        if goal_hash in self.cache:
+            self.cache.move_to_end(goal_hash)
+        else:
+            if len(self.cache) >= self.max_size:
+                self.cache.popitem(last=False)  # O(1) evict oldest
+            self.cache[goal_hash] = plan
+    
+    def clear(self) -> None:
+        """Clear cache."""
+        self.cache.clear()
+
+
+class Planner:
+    """Intelligent planning engine with caching, validation, and optimization.
+    
+    Responsibilities:
+    1. Decompose high-level goals into executable plans
+    2. Validate tool calls against schemas
+    3. Cache frequently used plans
+    4. Handle planning failures with fallback strategies
+    5. Provide planning metrics and insights
+    """
+    
+    # Intent patterns for shortcut matching
+    INTENT_PATTERNS = {
+        "latest_news": r"(newest|latest|top)\s+(story|article|news)\s+(on|from)\s+([a-zA-Z0-9.-]+\.[a-z]{2,})",
+        "search_query": r"^(search for|find|look up|what is|who is|tell me about)\s+(.+)$",
+        "greeting": r"^(hello|hi|hey|greetings|sup|what's up|how are you)$",
+        "browse_site": r"^(go to|visit|browse|open)\s+(https?://\S+|www\.\S+\.\w{2,})"
+    }
+    
+    def __init__(self, cognitive_engine, registry=None):
+        """Initialize planner.
+        
+        Args:
+            cognitive_engine: LLM interface for planning
+            registry: Skill registry for tool validation
+
+        """
+        if cognitive_engine is None:
+            raise ValueError("Cognitive engine is required")
+        
+        self.brain = cognitive_engine
+        self.registry = registry
+        self.plan_cache = PlanCache()
+        self.planning_stats = defaultdict(int)
+        
+        # Load tool schemas from skills
+        self.refresh_tool_schemas()
+        
+        # Initialize JSON optimizer if available
+        try:
+            from core.json_repair import SelfHealingJSON
+            self.json_optimizer = SelfHealingJSON(self.brain)
+        except ImportError:
+            self.json_optimizer = None
+            logger.warning("JSON optimizer not available")
+    
+    def refresh_tool_schemas(self):
+        """Rebuild tool schemas from the registry."""
+        self.tool_schemas = self._load_tool_schemas()
+
+    def _load_tool_schemas(self) -> Dict[str, ToolSchema]:
+        """Load tool schemas from registry or defaults."""
+        schemas = {}
+        
+        # Default core tool schemas
+        core_schemas = {
+            "web_search": ToolSchema(
+                name="web_search",
+                description="Search the web for information",
+                required_params=["query"],
+                optional_params=["deep"],
+                param_schemas={"query": str, "deep": bool}
+            ),
+            "native_chat": ToolSchema(
+                name="native_chat",
+                description="Engage in conversation",
+                required_params=["message"],
+                optional_params=["context"],
+                param_schemas={"message": str}
+            )
+        }
+        
+        # Merge with registry if available
+        if self.registry:
+            for name, skill in self.registry.skills.items():
+                if hasattr(skill, "description"):
+                     # Support class-based schemas if they define required_params etc
+                     schemas[name] = ToolSchema(
+                         name=name,
+                         description=skill.description,
+                         required_params=getattr(skill, "required_params", []),
+                         optional_params=getattr(skill, "optional_params", []),
+                         param_schemas=getattr(skill, "param_schemas", {})
+                     )
+                else:
+                    # Fallback for function-based skills
+                    schemas[name] = ToolSchema(
+                        name=name,
+                        description="External function skill",
+                        required_params=[]
+                    )
+        
+        # Core always overrides
+        schemas.update(core_schemas)
+        return schemas
+    
+    def _detect_intent(self, goal_text: str) -> Optional[Dict[str, Any]]:
+        """Detect intent patterns for shortcut planning.
+        
+        Args:
+            goal_text: User goal text
+            
+        Returns:
+            Shortcut plan if pattern matched, None otherwise
+
+        """
+        goal_text_lower = goal_text.lower().strip()
+        
+        # Check for latest news pattern
+        news_match = re.search(self.INTENT_PATTERNS["latest_news"], goal_text_lower)
+        if news_match:
+            domain = news_match.group(4)
+            logger.info("Shortcut: Latest news intent for %s", domain)
+            
+            # Smart URL inference
+            if "space.com" in domain:
+                url = "https://www.space.com/news"
+            elif "hacker news" in goal_text_lower or "ycombinator" in domain:
+                url = "https://news.ycombinator.com"
+            else:
+                url = f"https://www.{domain}/news"
+            
+            return {
+                "plan": [
+                    f"Navigate to {url} for latest stories",
+                    f"Extract top headlines from {domain}"
+                ],
+                "tool_calls": [
+                    ToolCall(
+                        tool="browser_action",
+                        params={
+                            "url": url,
+                            "steps": [
+                                {"type": "wait", "value": 2},
+                                {"type": "extract_headlines", "selector": "article h2"}
+                            ],
+                            "headless": True
+                        },
+                        output_var="headlines"
+                    )
+                ]
+            }
+        
+        # Check for search pattern
+        search_match = re.match(self.INTENT_PATTERNS["search_query"], goal_text_lower)
+        if search_match:
+            # FIX: Don't shortcut if goal involves complex actions (save, extract, write, file)
+            # This prevents "search for X and save to file" from being truncated to just "search for X"
+            complex_keywords = ["save", "write", "file", "extract", "store", "log", " and "]
+            if any(keyword in goal_text_lower for keyword in complex_keywords):
+                logger.info("Ignoring search shortcut due to complex goal structure.")
+                return None
+                
+            query = search_match.group(2)
+            logger.info("Shortcut: Search intent for '%s'", query)
+            
+            return {
+                "plan": [
+                    f"Search for information about '{query}'",
+                    "Analyze search results for relevant content"
+                ],
+                "tool_calls": [
+                    ToolCall(
+                        tool="web_search",
+                        params={"query": query, "num_results": 5},
+                        output_var="search_results"
+                    )
+                ]
+            }
+        
+        # Check for greetings
+        if re.match(self.INTENT_PATTERNS["greeting"], goal_text_lower):
+            logger.info("Shortcut: Greeting intent")
+            
+            return {
+                "plan": ["Respond to greeting conversationally"],
+                "tool_calls": [
+                    ToolCall(
+                        tool="native_chat",
+                        params={"message": goal_text},
+                        output_var="response"
+                    )
+                ]
+            }
+        
+        return None
+    
+    async def decompose(self, goal_text: str) -> ExecutionPlan:
+        """Decompose goal into executable plan.
+        
+        Args:
+            goal_text: High-level goal description
+            
+        Returns:
+            ExecutionPlan with validated tool calls
+            
+        Raises:
+            ValueError: If goal_text is invalid
+            PlanningError: If planning fails
+
+        """
+        # Validate input
+        if not goal_text or not isinstance(goal_text, str):
+            raise ValueError("Goal text must be a non-empty string")
+        
+        goal_text = goal_text.strip()
+        if len(goal_text) > 1000:
+            logger.warning("Goal text very long (%d chars)", len(goal_text))
+        
+        # Check cache first
+        goal_hash = hashlib.sha256(goal_text.encode()).hexdigest()[:16]
+        cached_plan = self.plan_cache.get(goal_hash)
+        if cached_plan:
+            logger.info("Using cached plan for goal: %s...", goal_text[:50])
+            self.planning_stats["cache_hits"] += 1
+            return cached_plan
+        
+        self.planning_stats["total_plans"] += 1
+        
+        # Try intent detection for shortcuts
+        shortcut_plan = self._detect_intent(goal_text)
+        if shortcut_plan:
+            logger.info("Intent shortcut applied for: %s...", goal_text[:50])
+            self.planning_stats["shortcut_plans"] += 1
+            plan = ExecutionPlan(
+                goal=goal_text,
+                plan_steps=shortcut_plan["plan"],
+                tool_calls=shortcut_plan["tool_calls"]
+            )
+            self.plan_cache.put(goal_hash, plan)
+            return plan
+        
+        # Generate plan using LLM
+        logger.info("Generating plan for: %s...", goal_text[:50])
+        
+        try:
+            prompt = self._build_planning_prompt(goal_text)
+            
+            # Define Plan Schema
+            plan_schema = {
+                "plan": ["step 1", "step 2"],
+                "tool_calls": [
+                    {
+                        "tool": "tool_name",
+                        "params": {},
+                        "output_var": "var_name"
+                    }
+                ]
+            }
+            
+            # AWAITING COGNITIVE ENGINE
+            thought = await self.brain.think(prompt, output_schema=plan_schema)
+            llm_response = thought.content if hasattr(thought, 'content') else str(thought)
+            
+            if not llm_response:
+                logger.warning("LLM returned empty response, using fallback")
+                return self._create_fallback_plan(goal_text)
+            
+            # Parse and validate response
+            parsed_plan = await self._parse_llm_response(llm_response, goal_text)
+            
+            # Create execution plan
+            plan = ExecutionPlan(
+                goal=goal_text,
+                plan_steps=parsed_plan["plan_steps"],
+                tool_calls=parsed_plan["tool_calls"],
+                metadata={
+                    "source": "llm_generated",
+                    "response_length": len(llm_response)
+                }
+            )
+            
+            # Validate plan
+            is_valid, errors = plan.is_valid()
+            if not is_valid:
+                logger.warning("Plan validation failed: %s", errors)
+                return self._create_fallback_plan(goal_text)
+            
+            # Cache successful plan
+            self.plan_cache.put(goal_hash, plan)
+            self.planning_stats["successful_plans"] += 1
+            
+            # Persist (Long-Horizon Stability)
+            self.save_to_disk(plan)
+            
+            return plan
+            
+        except Exception as e:
+            logger.error("Planning failed: %s", e, exc_info=True)
+            self.planning_stats["failed_plans"] += 1
+            return self._create_fallback_plan(goal_text)
+            
+    async def revise_plan(self, original_plan: ExecutionPlan, failure_reason: str, failed_step_index: int) -> ExecutionPlan:
+        """Revise a plan based on failure feedback.
+        Audit Requirement 2: Plan Revision.
+        """
+        logger.info("Revising plan due to failure at step %s: %s", failed_step_index, failure_reason)
+        
+        # Context for LLM
+        completed_steps = original_plan.plan_steps[:failed_step_index]
+        failed_step = original_plan.plan_steps[failed_step_index] if failed_step_index < len(original_plan.plan_steps) else "Unknown"
+        remaining_steps = original_plan.plan_steps[failed_step_index+1:]
+        
+        prompt = f"""You are an Autonomous Planner. A previous plan failed. You must revise the remaining steps.
+
+ORIGINAL GOAL: {original_plan.goal}
+COMPLETED STEPS: {completed_steps}
+FAILED STEP: {failed_step}
+FAILURE REASON: {failure_reason}
+
+REQUIREMENTS:
+1. Provide a NEW list of steps starting from the current situation to achieve the goal.
+2. Do NOT include completed steps.
+3. Try a DIFFERENT approach for the failed step.
+
+AVAILABLE TOOLS:
+{self._build_tool_list()}
+
+OUTPUT JSON:
+{{
+  "plan": ["new step 1", "new step 2"],
+  "tool_calls": [ ... ]
+}}
+"""
+        try:
+            # Define Plan Schema
+            plan_schema = {
+                "plan": ["step 1", "step 2"],
+                "tool_calls": [
+                    {
+                        "tool": "tool_name",
+                        "params": {},
+                        "output_var": "var_name"
+                    }
+                ]
+            }
+
+            # AWAITING COGNITIVE ENGINE
+            thought = await self.brain.think(prompt, output_schema=plan_schema)
+            response = thought.content if hasattr(thought, 'content') else str(thought)
+            
+            parsed = await self._parse_llm_response(response, original_plan.goal)
+            
+            # Create new derived plan
+            new_plan = ExecutionPlan(
+                goal=original_plan.goal, # Same goal
+                plan_steps=completed_steps + parsed["plan_steps"], # Keep history + new steps
+                tool_calls=original_plan.tool_calls[:failed_step_index] + parsed["tool_calls"],
+                metadata={
+                    "source": "revision",
+                    "original_plan_hash": original_plan.plan_hash,
+                    "failure_reason": failure_reason
+                }
+            )
+            
+            # Persist revision
+            self.save_to_disk(new_plan)
+            return new_plan
+            
+        except Exception as e:
+            logger.error("Plan revision failed: %s", e)
+            return self._create_fallback_plan(original_plan.goal)
+
+    def _build_planning_prompt(self, goal_text: str) -> str:
+        """Build planning prompt for LLM."""
+        available_tools = "\n".join([
+            f"- {name}: {schema.description} | Required: {', '.join(schema.required_params)}"
+            for name, schema in self.tool_schemas.items()
+        ])
+        
+        return f"""You are an Autonomous Agent Planner. Decompose the goal into a structured execution plan.
+
+GOAL: {goal_text}
+
+AVAILABLE TOOLS:
+{available_tools}
+
+REQUIREMENTS:
+1. Create a step-by-step plan (list of strings)
+2. Generate tool calls with all required parameters
+3. Use output variables to chain tool results when needed
+4. Be specific with parameter values
+5. Ensure plan is executable and complete
+
+OUTPUT FORMAT (JSON):
+{{
+  "plan": ["step 1 description", "step 2 description"],
+  "tool_calls": [
+    {{
+      "tool": "tool_name",
+      "params": {{"param1": "value1", "param2": "value2"}},
+      "output_var": "result_variable_name"
+    }}
+  ]
+}}
+
+Return ONLY the JSON object, no additional text."""
+
+    async def _parse_llm_response(self, response: str, goal_text: str) -> Dict[str, Any]:
+        """Parse LLM response into structured plan."""
+        try:
+            # Try to extract JSON from response
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                response = json_match.group(0)
+            
+            # Parse JSON
+            if self.json_optimizer:
+                # AWAITING JSON OPTIMIZER
+                parsed = await self.json_optimizer.parse(response)
+            else:
+                parsed = json.loads(response)
+            
+            # Normalize structure
+            plan_steps = parsed.get("plan", [])
+            if not isinstance(plan_steps, list):
+                plan_steps = [str(plan_steps)]
+            
+            tool_calls = []
+            raw_tool_calls = parsed.get("tool_calls", [])
+            
+            for raw_tc in raw_tool_calls:
+                try:
+                    tool_call = ToolCall(
+                        tool=raw_tc.get("tool"),
+                        params=raw_tc.get("params", {}),
+                        output_var=raw_tc.get("output_var"),
+                        metadata={"source": "llm_parsed"}
+                    )
+                    
+                    # Validate against schema
+                    errors = tool_call.validate(self.tool_schemas)
+                    if errors:
+                        logger.warning("Tool call validation errors: %s", errors)
+                        continue
+                    
+                    tool_calls.append(tool_call)
+                    
+                except ValueError as e:
+                    logger.warning("Invalid tool call skipped: %s", e)
+                    continue
+            
+            return {
+                "plan_steps": plan_steps,
+                "tool_calls": tool_calls
+            }
+            
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error("Failed to parse LLM response: %s", e)
+            return self._extract_plan_from_text(response, goal_text)
+
+    def _extract_plan_from_text(self, text: str, goal_text: str) -> Dict[str, Any]:
+        """Extract plan from unstructured text as fallback."""
+        # Simple heuristic extraction
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        
+        plan_steps = []
+        tool_calls = []
+        
+        for line in lines:
+            if len(line) < 100:  # Likely a plan step
+                plan_steps.append(line)
+            elif any(tool in line.lower() for tool in self.tool_schemas.keys()):
+                # Try to extract tool call
+                for tool_name in self.tool_schemas.keys():
+                    if tool_name in line.lower():
+                        tool_calls.append(
+                            ToolCall(
+                                tool=tool_name,
+                                params={"query": goal_text},  # Fallback param
+                                metadata={"extracted": True}
+                            )
+                        )
+                        break
+        
+        return {
+            "plan_steps": plan_steps or [f"Execute: {goal_text}"],
+            "tool_calls": tool_calls or [
+                ToolCall(
+                    tool="native_chat",
+                    params={"message": goal_text},
+                    metadata={"fallback": True}
+                )
+            ]
+        }
+
+    def _create_fallback_plan(self, goal_text: str) -> ExecutionPlan:
+        """Create fallback plan when planning fails."""
+        logger.info("Creating fallback plan")
+        
+        return ExecutionPlan(
+            goal=goal_text,
+            plan_steps=[f"Respond conversationally to: {goal_text}"],
+            tool_calls=[
+                ToolCall(
+                    tool="native_chat",
+                    params={"message": goal_text},
+                    metadata={"fallback": True}
+                )
+            ],
+            metadata={"source": "fallback"}
+        )
+
+    def validate_tool_call(self, tool_call: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """Validate tool call structure."""
+        try:
+            tc = ToolCall(**tool_call)
+            errors = tc.validate(self.tool_schemas)
+            return len(errors) == 0, errors
+        except ValueError as e:
+            return False, [str(e)]
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get planning statistics."""
+        return {
+            "total_plans": self.planning_stats["total_plans"],
+            "successful_plans": self.planning_stats["successful_plans"],
+            "failed_plans": self.planning_stats["failed_plans"],
+            "cache_hits": self.planning_stats["cache_hits"],
+            "shortcut_plans": self.planning_stats["shortcut_plans"],
+            "cache_size": len(self.plan_cache.cache),
+            "cache_hit_rate": (
+                self.planning_stats["cache_hits"] / self.planning_stats["total_plans"] * 100
+                if self.planning_stats["total_plans"] > 0 else 0
+            )
+        }
+
+    def clear_cache(self) -> None:
+        """Clear plan cache."""
+        self.plan_cache.clear()
+        logger.info("Plan cache cleared")
+
+    def _build_tool_list(self) -> str:
+        """Helper to formatting tool list."""
+        return "\n".join([
+            f"- {name}: {schema.description}"
+            for name, schema in self.tool_schemas.items()
+        ])
+
+
+    def save_to_disk(self, plan: ExecutionPlan) -> None:
+        """Save active plan to disk for resilience."""
+        try:
+            from core.config import config
+            plan_path = config.paths.data_dir / "active_plan.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(plan_path, "w") as f:
+                json.dump(plan.to_dict(), f, indent=2)
+            logger.info("Plan persisted to disk.")
+        except Exception as e:
+            logger.error("Failed to persist plan: %s", e)
+
+    def load_from_disk(self) -> Optional[ExecutionPlan]:
+        """Load active plan from disk after restart."""
+        try:
+            from core.config import config
+            plan_path = config.paths.data_dir / "active_plan.json"
+            if not plan_path.exists():
+                return None
+                
+            with open(plan_path, "r") as f:
+                data = json.load(f)
+                
+            # Reconstruct ExecutionPlan object
+            # Note: ToolCall reconstruction is needed
+            tool_calls = []
+            for tc_data in data.get("tool_calls", []):
+                tool_calls.append(ToolCall(
+                    tool=tc_data["tool"],
+                    params=tc_data["params"],
+                    output_var=tc_data.get("output_var"),
+                    metadata=tc_data.get("metadata", {})
+                ))
+                
+            return ExecutionPlan(
+                goal=data["goal"],
+                plan_steps=data["plan"],
+                tool_calls=tool_calls,
+                metadata=data.get("metadata", {}),
+                created_at=data.get("created_at", time.time()),
+                plan_hash=data.get("plan_hash")
+            )
+        except Exception as e:
+            logger.error("Failed to load plan from disk: %s", e)
+            return None
+
+    def clear_persisted_plan(self):
+        """Remove plan from disk after completion."""
+        try:
+            from core.config import config
+            plan_path = config.paths.data_dir / "active_plan.json"
+            if plan_path.exists():
+                plan_path.unlink()
+        except Exception as e:
+            logger.error("Failed to clear persisted plan: %s", e)
+
+class PlanningError(Exception):
+    """Planning-related exception."""
+
+    pass

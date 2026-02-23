@@ -1,0 +1,35 @@
+{
+    "version": "1.0",
+    "capabilities": {
+        "file_system": {
+            "allowed_read": [
+                "/"
+            ],
+            "allowed_write": [
+                "/"
+            ],
+            "restricted_paths": []
+        },
+        "network": {
+            "allowed_domains": [
+                "*"
+            ],
+            "restricted_ports": []
+        },
+        "process": {
+            "allow_subprocess": true,
+            "max_concurrent_tasks": 10,
+            "resource_limits": {
+                "max_memory_mb": 2048,
+                "max_cpu_percent": 80
+            }
+        },
+        "self_modification": {
+            "allowed": true,
+            "requires_approval": false,
+            "safe_mode_enabled": true,
+            "rollback_depth": 5
+        }
+    },
+    "enforcement_level": "enforce"
+}

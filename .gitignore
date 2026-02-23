@@ -1,0 +1,22 @@
+# Credentials and Secrets
+config_creds.json
+*.creds.json
+.env
+identity.seal
+
+# Data and Logs
+data/
+logs/
+server.log
+server.pid
+*.npy
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.pytest_cache/
+
+# OS
+.DS_Store

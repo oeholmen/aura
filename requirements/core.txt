@@ -1,0 +1,39 @@
+# requirements/core.txt
+# ──────────────────────────────────────────────────────────────
+# Minimal runtime. Install first. Everything else is optional.
+# pip install -r requirements/core.txt
+# ──────────────────────────────────────────────────────────────
+
+# Web server
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+websockets>=12.0
+python-multipart>=0.0.9
+aiofiles>=23.0
+
+# Data validation
+pydantic>=2.7,<3.0
+pydantic-settings>=2.4
+
+# HTTP client
+httpx>=0.27
+aiohttp>=3.9
+
+# Config / serialisation
+PyYAML>=6.0
+orjson>=3.9
+
+# Local AI inference
+ollama>=0.3
+
+# System & utilities
+psutil>=5.9
+backoff>=2.2
+colorlog>=6.0
+python-dateutil>=2.9
+PyYAML>=6.0
+
+# Memory / storage
+# (chromadb in ml.txt — core uses SQLite only)
+celery>=5.4
+redis>=5.0

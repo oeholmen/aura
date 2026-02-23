@@ -1,0 +1,40 @@
+
+import hashlib
+import logging
+from collections import deque
+from typing import Any, List
+
+logger = logging.getLogger("Cognition.LoopDetector")
+
+class LoopDetector:
+    """detects recursive thought patterns or repetitive actions to prevent infinite loops.
+    """
+    
+    def __init__(self, window_size: int = 10):
+        self.history = deque(maxlen=window_size)
+        self.threshold = 3 
+        
+    def add_event(self, content: str):
+        """Add an event (thought content or action) to history."""
+        # Normalize content to catch slight variations
+        content_hash = hashlib.md5(content.strip().lower().encode()).hexdigest()
+        self.history.append(content_hash)
+        
+    def detect_loop(self) -> bool:
+        """Check if the most recent event has occurred too frequently in the window."""
+        if not self.history:
+            return False
+            
+        recent = self.history[-1]
+        count = list(self.history).count(recent)
+        
+        if count >= self.threshold:
+            logger.warning("⚠️ Loop Detected! Event repeated %s times in last %s cycles.", count, len(self.history))
+            return True
+            
+        return False
+
+    def clear(self):
+        self.history.clear()
+
+loop_detector = LoopDetector()
