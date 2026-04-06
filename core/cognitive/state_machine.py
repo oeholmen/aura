@@ -357,9 +357,16 @@ class StateMachine:
             
             while attempt <= max_retries:
                 try:
+                    # Hard cap: keep system prompt under ~5000 tokens (~20K chars)
+                    # to leave room for response within 8192-token context window.
+                    _MAX_PROMPT_CHARS = 20000
+                    if len(system_prompt) > _MAX_PROMPT_CHARS:
+                        # Trim from the middle (keep identity at top + recent context at bottom)
+                        half = _MAX_PROMPT_CHARS // 2
+                        system_prompt = system_prompt[:half] + "\n[...context trimmed...]\n" + system_prompt[-half:]
+
                     response_chunks = []
                     streaming_started = False
-                    # v26.1 Resilience: 30s timeout for stream initiation included inside the stream loop
                     if hasattr(self.llm, "generate_stream"):
                         # Phase 1: Stream to UI and yield tokens
                         response_chunks = []

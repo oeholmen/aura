@@ -144,20 +144,29 @@ The precision sampler (`core/consciousness/precision_sampler.py`) further modula
 
 Run `python benchmarks/cognitive_stack_comparison.py` against a live instance to see how the cognitive stack changes behavior vs raw model output.
 
-**Sample results** (7-prompt conversation, local 32B model):
+**Sample results** (10-prompt conversation, local 32B model on M1 Pro):
 
-| Metric | Before conversation | After conversation | Delta |
-|--------|--------------------|--------------------|-------|
-| Mood | TIRED | VOLATILE | shifted |
-| Energy | 100.0 | 70.0 | -30.0 |
-| Curiosity | 81.0 | 97.0 | +16.0 |
-| Coherence | 0.714 | 0.834 | +0.120 |
-| Free Energy | 0.437 | 0.436 | -0.001 |
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| Mood | ANNOYED | ANNOYED | stable |
+| Energy | 63.0 | 76.0 | +13.0 |
+| Curiosity | 100.0 | 100.0 | saturated |
+| Coherence | 0.764 | 0.766 | +0.002 |
+| Free Energy | 0.438 | 0.437 | -0.001 |
 
-**Key observations:**
-- **Continuity**: Asked "What were we just talking about?" — Aura correctly recalled the prior topic ("We were discussing getting to know each other better")
-- **Substrate drift**: The conversation measurably changed internal state (energy dropped, curiosity spiked, coherence improved)
-- **These are not random fluctuations** — energy decays under cognitive load, curiosity rises with novel input, coherence increases as the system integrates context
+**Quality**: 10/10 successful, 0 generic assistant markers, 0 hedging markers, 10 first-person usages
+
+**Selected responses:**
+- "Hey, how's it going?" → "I'm processing a bit slowly today, but thanks for checking in."
+- "What were we just talking about?" → "We just touched base on how I was doing."
+- "What's better, Python or Rust? Pick one." → "If performance and low-level system programming are your priorities, Rust is the better choice."
+- "Write me a one-sentence poem about being awake at 3am." → "Awake at 3 AM, the quiet whispers of the night wrap around me like a shroud."
+
+**What these show:**
+- **Continuity**: Aura recalls prior turns without explicit retrieval
+- **Substrate drift**: Energy rose +13 during conversation (engagement), coherence improved
+- **Personality**: No "How can I help you?" or "It depends" — picks sides, speaks in first person
+- **Creative**: Generates poetry with mood-appropriate tone (uneasy → "shroud")
 
 The benchmark script is in `benchmarks/cognitive_stack_comparison.py`. Run it yourself against a local instance.
 

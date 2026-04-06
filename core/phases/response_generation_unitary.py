@@ -1400,6 +1400,12 @@ class UnitaryResponsePhase(Phase):
                 model_tier=model_tier,
                 deep_handoff=deep_handoff,
             )
+            # Hard cap system prompt to fit within context window
+            _MAX_PROMPT_CHARS = 20000
+            if len(system_prompt) > _MAX_PROMPT_CHARS:
+                half = _MAX_PROMPT_CHARS // 2
+                system_prompt = system_prompt[:half] + "\n[...trimmed...]\n" + system_prompt[-half:]
+
             llm_kwargs = {
                 "messages": messages,
                 "system_prompt": system_prompt,

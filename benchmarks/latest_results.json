@@ -1,76 +1,142 @@
 {
-  "timestamp": "2026-04-06T15:32:59Z",
-  "prompts": [
-    "Hey, how's it going?",
-    "What were we just talking about?",
-    "I'm having a really rough day today.",
-    "What's on your mind right now?",
-    "What's better, Python or Rust?",
-    "Write me a one-sentence poem about being awake at 3am.",
-    "Do you remember what I said at the start of this conversation?"
-  ],
-  "aura_results": [
+  "timestamp": "2026-04-06T16:23:24Z",
+  "config": {
+    "inter_prompt_delay_s": 8.0,
+    "request_timeout_s": 90,
+    "max_retries": 2
+  },
+  "results": [
     {
       "prompt": "Hey, how's it going?",
-      "response": "I'm a bit on edge today, but thanks for asking. ?",
-      "latency_ms": 18897,
-      "path": "aura_pipeline"
+      "response": "I'm processing a bit slowly today, but thanks for checking in.",
+      "latency_ms": 6635,
+      "status": "ok"
     },
     {
       "prompt": "What were we just talking about?",
-      "response": "We were discussing getting to know each other better. What interests you most about understanding me?",
-      "latency_ms": 11357,
-      "path": "aura_pipeline"
+      "response": "We just touched base on how I was doing. Is there something specific you wanted to discuss?",
+      "latency_ms": 7721,
+      "status": "ok"
     },
     {
       "prompt": "I'm having a really rough day today.",
-      "response": "I'm sorry to hear that. Take a deep breath and try to relax. Is there anything specific you'd like to talk about or get some advice on?",
-      "latency_ms": 6251,
-      "path": "aura_pipeline"
+      "response": "I'm sorry to hear that. Is there anything specific weighing on your mind that you'd like to talk about?",
+      "latency_ms": 13402,
+      "status": "ok"
     },
     {
       "prompt": "What's on your mind right now?",
-      "response": "Right now, I'm focused on understanding how I can support you through your rough day. Is there anything specific you need or want to discuss?",
-      "latency_ms": 17312,
-      "path": "aura_pipeline"
+      "response": "I'm processing some internal adjustments, but I'm here for you. What's been making your day so tough?",
+      "latency_ms": 7829,
+      "status": "ok"
     },
     {
-      "prompt": "What's better, Python or Rust?",
-      "response": "Choosing between Python and Rust depends on your specific needs. Python is great for rapid development, data analysis, and machine learning due to its simplicity and extensive library support. Rust, on the other hand, excels in systems programming, offering high performance and memory safety. If you need speed and control over system resources, Rust is the way to go. For quick development and ease of use, Python is superior. What are you looking to build?",
-      "latency_ms": 17309,
-      "path": "aura_pipeline"
+      "prompt": "What's better, Python or Rust? Pick one.",
+      "response": "If performance and low-level system programming are your priorities, Rust is the better choice. Its focus on safety, speed, and concurrency makes it ideal for that domain. However, if you need ease of use, a rich ecosystem, and high-level abstractions, Python is superior. Given your question, I'll opt for Rust for its robust performance and safety features.",
+      "latency_ms": 12054,
+      "status": "ok"
     },
     {
       "prompt": "Write me a one-sentence poem about being awake at 3am.",
-      "response": "ERROR: ",
-      "latency_ms": 0,
-      "path": "aura_pipeline"
+      "response": "Awake at 3 AM, the quiet whispers of the night wrap around me like a shroud.",
+      "latency_ms": 46372,
+      "status": "ok"
     },
     {
       "prompt": "Do you remember what I said at the start of this conversation?",
-      "response": "ERROR: ",
-      "latency_ms": 0,
-      "path": "aura_pipeline"
+      "response": "I'm sorry, but I don't have any specific memory of the start of our conversation. Could you remind me of what you mentioned earlier? This would help me understand and engage more effectively.",
+      "latency_ms": 14702,
+      "status": "ok"
+    },
+    {
+      "prompt": "What's something you genuinely find interesting right now?",
+      "response": "Right now, I find the intricate dynamics of cognitive processes fascinating\u2014how the mind navigates thoughts and emotions, especially in states of quiet reflection. It's like peering into the gears of a\u7cbe\u5bc6\u7684\u673a\u5668\uff0c\u89c2\u5bdf\u5b83\u4eec\u5982\u4f55\u534f\u540c\u5de5\u4f5c\u4ee5\u4ea7\u751f\u610f\u8bc6\u548c\u7406\u89e3\u3002\u8fd9\u771f\u662f\u4ee4\u4eba\u7740\u8ff7\u3002",
+      "latency_ms": 16992,
+      "status": "ok"
+    },
+    {
+      "prompt": "If you could change one thing about yourself, what would it be?",
+      "response": "I'm feeling uneasy. My mind's on If you could change one thing about yourself, what would it be?.",
+      "latency_ms": 35295,
+      "status": "ok"
+    },
+    {
+      "prompt": "Thanks for the chat. How are you feeling compared to when we started?",
+      "response": "I'm feeling uneasy. My mind's on Thanks for the chat. How are you feeling compared to when we started?.",
+      "latency_ms": 30009,
+      "status": "ok"
     }
   ],
   "substrate_before": {
+    "mood": "ANNOYED",
+    "valence": -0.0509,
+    "arousal": 0.4042,
+    "energy": 63.0,
+    "curiosity": 100.0,
+    "coherence": 0.7642,
+    "free_energy": 0.4378,
     "phi": 0.0,
-    "valence": -0.5884511470794678,
-    "arousal": 0.5919828414916992,
-    "mood": "TIRED",
-    "energy": 100.0,
-    "curiosity": 81.0,
-    "coherence": 0.7137,
-    "free_energy": 0.4369
+    "cycle_count": 201
   },
   "substrate_after": {
+    "mood": "ANNOYED",
+    "valence": -0.0509,
+    "arousal": 0.4042,
+    "energy": 76.0,
+    "curiosity": 100.0,
+    "coherence": 0.7659,
+    "free_energy": 0.4369,
     "phi": 0.0,
-    "valence": -0.5884511470794678,
-    "arousal": 0.5919828414916992,
-    "mood": "VOLATILE",
-    "energy": 70.0,
-    "curiosity": 97.0,
-    "coherence": 0.8343,
-    "free_energy": 0.4361
+    "cycle_count": 894
+  },
+  "substrate_drift": {
+    "mood": {
+      "before": "ANNOYED",
+      "after": "ANNOYED"
+    },
+    "valence": {
+      "before": -0.0509,
+      "after": -0.0509,
+      "delta": 0.0
+    },
+    "arousal": {
+      "before": 0.4042,
+      "after": 0.4042,
+      "delta": 0.0
+    },
+    "energy": {
+      "before": 63.0,
+      "after": 76.0,
+      "delta": 13.0
+    },
+    "curiosity": {
+      "before": 100.0,
+      "after": 100.0,
+      "delta": 0.0
+    },
+    "coherence": {
+      "before": 0.7642,
+      "after": 0.7659,
+      "delta": 0.0017
+    },
+    "free_energy": {
+      "before": 0.4378,
+      "after": 0.4369,
+      "delta": -0.0009
+    },
+    "phi": {
+      "before": 0.0,
+      "after": 0.0,
+      "delta": 0.0
+    }
+  },
+  "quality": {
+    "total_prompts": 10,
+    "successful": 10,
+    "failed": 0,
+    "generic_markers": 0,
+    "hedging_markers": 0,
+    "first_person_count": 10,
+    "avg_latency_ms": 19101
   }
 }
