@@ -739,3 +739,67 @@ async def api_voice_affect_modulate(
             "hold_seconds": hold_seconds,
             "error": str(e),
         })
+
+
+# ── Code Graph (Self-Knowledge) ─────────────────────────────────────────────
+
+@router.get("/code-graph/stats")
+async def api_code_graph_stats(_: None = Depends(_require_internal)):
+    """Code graph statistics — how well Aura knows her own codebase."""
+    try:
+        graph = ServiceContainer.get("code_graph", default=None)
+        if graph is None:
+            return JSONResponse({"status": "not_initialized"})
+        return JSONResponse(graph.get_stats())
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
+
+@router.get("/code-graph/search")
+async def api_code_graph_search(q: str, type: str = "", limit: int = 20, _: None = Depends(_require_internal)):
+    """Search symbols in the code graph."""
+    try:
+        graph = ServiceContainer.get("code_graph", default=None)
+        if graph is None:
+            return JSONResponse({"error": "Code graph not initialized"})
+        results = graph.search_symbols(q, sym_type=type or None, limit=limit)
+        return JSONResponse({"query": q, "results": results, "count": len(results)})
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
+
+@router.get("/code-graph/who-calls")
+async def api_code_graph_who_calls(name: str, limit: int = 20, _: None = Depends(_require_internal)):
+    """Find all callers of a function."""
+    try:
+        graph = ServiceContainer.get("code_graph", default=None)
+        if graph is None:
+            return JSONResponse({"error": "Code graph not initialized"})
+        callers = graph.who_calls(name, limit=limit)
+        return JSONResponse({"function": name, "callers": callers, "count": len(callers)})
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
+
+@router.get("/code-graph/hotspots")
+async def api_code_graph_hotspots(limit: int = 15, _: None = Depends(_require_internal)):
+    """Most-called functions in the codebase."""
+    try:
+        graph = ServiceContainer.get("code_graph", default=None)
+        if graph is None:
+            return JSONResponse({"error": "Code graph not initialized"})
+        return JSONResponse({"hotspots": graph.hotspots(limit=limit)})
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
+
+@router.get("/code-graph/orphans")
+async def api_code_graph_orphans(limit: int = 20, _: None = Depends(_require_internal)):
+    """Functions never called (potential dead code)."""
+    try:
+        graph = ServiceContainer.get("code_graph", default=None)
+        if graph is None:
+            return JSONResponse({"error": "Code graph not initialized"})
+        return JSONResponse({"orphans": graph.orphans(limit=limit)})
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
