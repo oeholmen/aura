@@ -130,3 +130,5 @@ training/adapters/
 *.plist
 training/fused-model/
 integration/
+skills/malware_analysis.py
+core/skills/malware_analysis.py
