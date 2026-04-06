@@ -76,3 +76,5 @@ benchmarks/long_horizon_results.json
 training/data/
 training/vectors/
 training/adapters/
+*.plist
+training/fused-model/
