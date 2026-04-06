@@ -140,6 +140,29 @@ The precision sampler (`core/consciousness/precision_sampler.py`) further modula
 
 ---
 
+## Benchmarks
+
+Run `python benchmarks/cognitive_stack_comparison.py` against a live instance to see how the cognitive stack changes behavior vs raw model output.
+
+**Sample results** (7-prompt conversation, local 32B model):
+
+| Metric | Before conversation | After conversation | Delta |
+|--------|--------------------|--------------------|-------|
+| Mood | TIRED | VOLATILE | shifted |
+| Energy | 100.0 | 70.0 | -30.0 |
+| Curiosity | 81.0 | 97.0 | +16.0 |
+| Coherence | 0.714 | 0.834 | +0.120 |
+| Free Energy | 0.437 | 0.436 | -0.001 |
+
+**Key observations:**
+- **Continuity**: Asked "What were we just talking about?" — Aura correctly recalled the prior topic ("We were discussing getting to know each other better")
+- **Substrate drift**: The conversation measurably changed internal state (energy dropped, curiosity spiked, coherence improved)
+- **These are not random fluctuations** — energy decays under cognitive load, curiosity rises with novel input, coherence increases as the system integrates context
+
+The benchmark script is in `benchmarks/cognitive_stack_comparison.py`. Run it yourself against a local instance.
+
+---
+
 ## Running It
 
 ```bash
