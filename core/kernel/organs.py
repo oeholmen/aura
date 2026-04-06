@@ -1,9 +1,8 @@
 import asyncio
 import logging
 import os
-import sys
 from dataclasses import dataclass, field
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.kernel.aura_kernel import AuraKernel
@@ -13,15 +12,25 @@ try:
 except ImportError:
     ServiceContainer = None
 
+from core.kernel.organ_fallbacks import (
+    FallbackLLM,
+    FallbackNeural,
+    FallbackOrgan,
+    FallbackVision,
+    FallbackVoice,
+)
+
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class OrganStub:
-    """
-    Pattern for handling high-latency hardware or external subsystems.
-    Explicitly resolves dependencies from the Kernel's registry to ensure
-    Closed-Graph integrity.
+    """Lazy-loading wrapper for high-latency hardware or external subsystems.
+
+    Each organ resolves its real implementation from the service container
+    or kernel registry. If that fails (timeout, missing dependency, crash),
+    a minimal fallback keeps the kernel tick alive until the real subsystem
+    comes online.
     """
 
     name: str
@@ -30,203 +39,126 @@ class OrganStub:
     instance: Any = None
 
     async def load(self) -> None:
-        """
-        [ZENITH] Heavy initialization with rigid timeouts.
-        Allows the Kernel to boot instantly while 'organs' warm up.
-        """
-        logger.info(f"Loading organ: {self.name}...")
+        """Resolve the real subsystem, falling back on timeout or error."""
+        logger.info("Loading organ: %s...", self.name)
         try:
             async with asyncio.timeout(5.0):
-                if self.name in ("brain", "llm"):
-                    try:
-                        from core.brain.llm.llm_router import IntelligentLLMRouter as LLMRouter
-                        self.instance = self.kernel.get(LLMRouter)
-                    except Exception:
-                        self.instance = None
-
-                    if self.instance:
-                        if not hasattr(self.instance, "think") and hasattr(self.instance, "generate"):
-                            self.instance.think = self.instance.generate
-                    else:
-                        class MockLLM:
-                            async def think(self, prompt: str, **kwargs) -> str:
-                                return "I'm Aura."
-
-                            async def classify(self, prompt: str) -> str:
-                                return "CHAT"
-
-                        self.instance = MockLLM()
-                elif self.name == "vision":
-                    if ServiceContainer:
-                        self.instance = ServiceContainer.get("vision_presence", default=None)
-                    if not self.instance:
-                        class MockVision:
-                            async def capture(self):
-                                return None
-
-                            async def capture_desktop(self):
-                                return None
-
-                            async def load(self):
-                                pass
-
-                        self.instance = MockVision()
-                elif self.name == "neural":
-                    safe_boot = os.getenv("AURA_SAFE_BOOT_DESKTOP", "0") == "1"
-                    try:
-                        def _build_neural():
-                            from core.senses.neural_bridge import NeuralBridge
-
-                            return NeuralBridge(lightweight_mode=safe_boot)
-
-                        self.instance = await asyncio.wait_for(asyncio.to_thread(_build_neural), timeout=1.5)
-                        await asyncio.wait_for(self.instance.load(), timeout=2.5 if safe_boot else 4.0)
-                    except Exception as e:
-                        logger.warning(f"Failed to load NeuralBridge: {e}")
-
-                        class MockNeural:
-                            async def load(self):
-                                pass
-
-                            def get_status(self):
-                                return {"is_running": False, "lightweight_mode": True}
-
-                        self.instance = MockNeural()
-                elif self.name == "cookie":
-                    try:
-                        from core.autonomy.reflective_cookie import ReflectiveCookie
-
-                        self.instance = ReflectiveCookie(self.kernel)
-                        await self.instance.load()
-                    except Exception:
-                        class MockCookie:
-                            async def load(self):
-                                pass
-
-                        self.instance = MockCookie()
-                elif self.name == "prober":
-                    try:
-                        from core.brain.alignment_prober import EmpathyProber
-
-                        self.instance = EmpathyProber(self.kernel)
-                        await self.instance.load()
-                    except Exception:
-                        class MockProber:
-                            async def load(self):
-                                pass
-
-                        self.instance = MockProber()
-                elif self.name == "tricorder":
-                    try:
-                        from core.cybernetics.tricorder import Tricorder
-
-                        self.instance = Tricorder(self.kernel)
-                        await self.instance.load()
-                    except Exception:
-                        class MockTricorder:
-                            async def load(self):
-                                pass
-
-                        self.instance = MockTricorder()
-                elif self.name == "ice_layer":
-                    try:
-                        from core.cybernetics.ice_layer import ICELayer
-
-                        self.instance = ICELayer(self.kernel)
-                        await self.instance.load()
-                    except Exception:
-                        class MockICE:
-                            async def load(self):
-                                pass
-
-                        self.instance = MockICE()
-                elif self.name == "omni_tool":
-                    try:
-                        from core.cybernetics.omni_tool import OmniTool
-
-                        self.instance = OmniTool(self.kernel)
-                        await self.instance.load()
-                    except Exception:
-                        class MockOmni:
-                            async def load(self):
-                                pass
-
-                        self.instance = MockOmni()
-                elif self.name == "memory":
-                    if ServiceContainer:
-                        self.instance = ServiceContainer.get("memory_facade", default=None)
-                elif self.name == "voice":
-                    if ServiceContainer:
-                        try:
-                            self.instance = await asyncio.wait_for(
-                                asyncio.to_thread(ServiceContainer.get, "voice_engine", default=None),
-                                timeout=2.0,
-                            )
-                        except asyncio.TimeoutError:
-                            logger.warning("VoiceEngine resolution TIMEOUT. Proceeding without voice.")
-
-                    if not self.instance:
-                        class MockVoice:
-                            async def speak(self, t):
-                                pass
-
-                            async def say(self, t):
-                                pass
-
-                            async def load(self):
-                                pass
-
-                        self.instance = MockVoice()
-                elif self.name == "metabolism":
-                    if ServiceContainer:
-                        self.instance = ServiceContainer.get("metabolic_monitor", default=None)
-                elif self.name == "continuity":
-                    try:
-                        from core.cybernetics.knowledge_continuity import KnowledgeContinuity
-
-                        self.instance = KnowledgeContinuity(self.kernel)
-                        await asyncio.wait_for(self.instance.load(), timeout=3.0)
-                    except Exception as e:
-                        logger.warning(f"Continuity organ load failed: {e}")
-
-                        class MockContinuity:
-                            async def load(self):
-                                pass
-
-                        self.instance = MockContinuity()
-                else:
-                    logger.warning(f"Unknown organ '{self.name}'. Providing generic fallback.")
-
-                    class GenericMock:
-                        async def load(self):
-                            pass
-
-                    self.instance = GenericMock()
+                self.instance = await self._resolve()
         except asyncio.TimeoutError:
-            logger.warning(f"⚠️ Organ {self.name} load TIMEOUT. Providing mock fallback.")
-
-            class TimeoutMock:
-                async def load(self):
-                    pass
-
-            self.instance = TimeoutMock()
+            logger.warning("Organ %s load TIMEOUT — using fallback.", self.name)
+            self.instance = FallbackOrgan()
         except Exception as e:
-            logger.exception(f"OrganStub: unexpected error while resolving {self.name}: {e}")
-
-            class ErrorMock:
-                async def load(self):
-                    pass
-
-            self.instance = ErrorMock()
+            logger.exception("Organ %s load failed: %s — using fallback.", self.name, e)
+            self.instance = FallbackOrgan()
 
         self.ready.set()
-        logger.debug(f"Organ {self.name} load complete.")
+        logger.debug("Organ %s load complete.", self.name)
+
+    async def _resolve(self) -> Any:
+        """Attempt to load the real subsystem for this organ."""
+        name = self.name
+
+        if name in ("brain", "llm"):
+            return await self._resolve_llm()
+        elif name == "vision":
+            return self._resolve_from_container("vision_presence") or FallbackVision()
+        elif name == "neural":
+            return await self._resolve_neural()
+        elif name == "cookie":
+            return await self._resolve_module("core.autonomy.reflective_cookie", "ReflectiveCookie")
+        elif name == "prober":
+            return await self._resolve_module("core.brain.alignment_prober", "EmpathyProber")
+        elif name == "tricorder":
+            return await self._resolve_module("core.cybernetics.tricorder", "Tricorder")
+        elif name == "ice_layer":
+            return await self._resolve_module("core.cybernetics.ice_layer", "ICELayer")
+        elif name == "omni_tool":
+            return await self._resolve_module("core.cybernetics.omni_tool", "OmniTool")
+        elif name == "memory":
+            return self._resolve_from_container("memory_facade")
+        elif name == "voice":
+            return await self._resolve_voice()
+        elif name == "metabolism":
+            return self._resolve_from_container("metabolic_monitor")
+        elif name == "continuity":
+            return await self._resolve_continuity()
+        else:
+            logger.warning("Unknown organ '%s' — using generic fallback.", name)
+            return FallbackOrgan()
+
+    # ── Organ-specific resolvers ────────────────────────────────────────
+
+    async def _resolve_llm(self) -> Any:
+        try:
+            from core.brain.llm.llm_router import IntelligentLLMRouter as LLMRouter
+            instance = self.kernel.get(LLMRouter)
+        except Exception:
+            instance = None
+
+        if instance:
+            if not hasattr(instance, "think") and hasattr(instance, "generate"):
+                instance.think = instance.generate
+            return instance
+        return FallbackLLM()
+
+    async def _resolve_neural(self) -> Any:
+        safe_boot = os.getenv("AURA_SAFE_BOOT_DESKTOP", "0") == "1"
+        try:
+            def _build():
+                from core.senses.neural_bridge import NeuralBridge
+                return NeuralBridge(lightweight_mode=safe_boot)
+
+            instance = await asyncio.wait_for(asyncio.to_thread(_build), timeout=1.5)
+            await asyncio.wait_for(instance.load(), timeout=2.5 if safe_boot else 4.0)
+            return instance
+        except Exception as e:
+            logger.warning("NeuralBridge load failed: %s", e)
+            return FallbackNeural()
+
+    async def _resolve_voice(self) -> Any:
+        if ServiceContainer:
+            try:
+                instance = await asyncio.wait_for(
+                    asyncio.to_thread(ServiceContainer.get, "voice_engine", default=None),
+                    timeout=2.0,
+                )
+                if instance:
+                    return instance
+            except asyncio.TimeoutError:
+                logger.warning("VoiceEngine resolution TIMEOUT.")
+        return FallbackVoice()
+
+    async def _resolve_continuity(self) -> Any:
+        try:
+            from core.cybernetics.knowledge_continuity import KnowledgeContinuity
+            instance = KnowledgeContinuity(self.kernel)
+            await asyncio.wait_for(instance.load(), timeout=3.0)
+            return instance
+        except Exception as e:
+            logger.warning("Continuity organ load failed: %s", e)
+            return FallbackOrgan()
+
+    async def _resolve_module(self, module_path: str, class_name: str) -> Any:
+        """Generic resolver: import class, construct with kernel, call load()."""
+        try:
+            import importlib
+            mod = importlib.import_module(module_path)
+            cls = getattr(mod, class_name)
+            instance = cls(self.kernel)
+            await instance.load()
+            return instance
+        except Exception:
+            return FallbackOrgan()
+
+    # ── Helpers ──────────────────────────────────────────────────────────
+
+    def _resolve_from_container(self, service_name: str) -> Any:
+        if ServiceContainer:
+            return ServiceContainer.get(service_name, default=None)
+        return None
 
     def get_instance(self) -> Any:
-        """
-        Returns the hardware instance if ready, otherwise raises error.
-        Prevents 'mid-tick' crashes due to uninitialized hardware.
-        """
+        """Returns the organ instance. Raises if not yet loaded."""
         if not self.ready.is_set():
             raise RuntimeError(f"Attempted to access organ '{self.name}' before it was READY.")
         return self.instance
