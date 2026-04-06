@@ -389,28 +389,23 @@ class PhiConsciousnessPhase(Phase):
         """Compute phi using the best available method.
 
         Priority:
-          1. RIIU (covariance-based IIT surrogate) — needs 8+ samples
-          2. PhiCore surrogate (state-space norm + covariance) — needs 20+ states
+          1. PhiCore IIT 4.0 (real TPM + KL-divergence + exhaustive MIP search)
+          2. PhiCore surrogate (state-space covariance) if full compute not ready
           3. Lightweight weighted-mean approximation (always available)
         """
-        # Try RIIU first (most principled)
-        riiu = self._get_riiu()
-        if riiu is not None:
-            try:
-                import numpy as np
-                vec = np.array(_build_emotion_vector(state), dtype=np.float64)
-                phi = await asyncio.to_thread(riiu.compute_phi, vec)
-                # RIIU returns raw log-det difference — normalize to [0,1]
-                # Empirically, values above 5.0 are extremely integrated
-                phi_norm = min(1.0, max(0.0, phi / 5.0))
-                if phi_norm > 0.001:
-                    return float(f"{phi_norm:.4f}")
-            except Exception as e:
-                logger.debug("RIIU phi failed: %s", e)
-
-        # Try PhiCore surrogate (uses substrate state history)
+        # Try PhiCore full IIT 4.0 first (real computation)
         phi_core = self._get_phi_core()
         if phi_core is not None:
+            try:
+                result = await asyncio.to_thread(phi_core.compute_phi)
+                if result is not None:
+                    phi_val = float(getattr(result, "phi", 0.0))
+                    if phi_val > 0.001:
+                        return float(f"{phi_val:.4f}")
+            except Exception as e:
+                logger.debug("PhiCore IIT 4.0 compute failed: %s", e)
+
+            # Fall back to PhiCore surrogate if full compute not ready yet
             try:
                 surrogate = await asyncio.to_thread(phi_core.compute_surrogate_phi)
                 if surrogate > 0.001:

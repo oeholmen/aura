@@ -73,10 +73,21 @@ class SwarmProtocol:
     async def _process_gossip(self, message: Dict[str, Any]):
         msg_type = message.get("type")
         if msg_type == "mood_sync":
-            # Update local perception of the swarm's global mood
-            peer_mood = message.get("mood")
-            # logger.debug(f"Swarm Sync: Peer {message['node_id']} is feeling {peer_mood}")
-            pass
+            peer_id = message.get("node_id", "unknown")
+            peer_mood = message.get("mood", {})
+            peer_valence = float(peer_mood.get("valence", 0.0)) if isinstance(peer_mood, dict) else 0.0
+
+            # Mood contagion: nudge local affect toward swarm average
+            try:
+                from core.container import ServiceContainer
+                affect = ServiceContainer.get("affect_engine", default=None)
+                if affect is not None and hasattr(affect, "modify"):
+                    # Weak contagion factor — peers influence but don't override
+                    contagion_weight = 0.05
+                    affect.modify(valence_delta=peer_valence * contagion_weight)
+                    logger.debug("Swarm mood contagion from %s: valence nudge %.3f", peer_id, peer_valence * contagion_weight)
+            except Exception as e:
+                logger.debug("Mood contagion failed: %s", e)
         elif msg_type == "skill_verification":
             # Consensus Gating: Verify a forged skill
             skill_id = message.get("skill_id")

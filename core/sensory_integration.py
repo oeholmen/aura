@@ -198,22 +198,58 @@ class VisionSystem:
         return result
     
     async def analyze(self, capture_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze captured visual data (Async)."""
+        """Analyze captured visual data via the cognitive engine."""
         if not capture_data or "error" in capture_data:
             return {"error": "invalid_capture"}
-        
-        # This is compute intensive, offload to thread
-        async def _mock_analyze():
-            await asyncio.sleep(0.1) # Simulate overhead
-            return {
-                "timestamp": time.time(),
-                "objects_detected": [],
-                "scene_description": "Visual analysis requires vision model integration",
-                "text_detected": [],
-                "faces_detected": 0
-            }
-        
-        return await _mock_analyze()
+
+        # Try real vision analysis via screen_vision -> cognitive engine
+        try:
+            from core.container import ServiceContainer
+            brain = ServiceContainer.get("cognitive_engine", default=None)
+            if brain is None:
+                brain = ServiceContainer.get("brain", default=None)
+
+            if brain is not None and hasattr(brain, "think"):
+                import base64
+                image_path = capture_data.get("path")
+                image_b64 = None
+
+                if image_path:
+                    from PIL import Image
+                    import io
+                    img = Image.open(image_path)
+                    img = img.convert("RGB")
+                    img.thumbnail((672, 672))
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=80)
+                    image_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                elif capture_data.get("base64"):
+                    image_b64 = capture_data["base64"]
+
+                if image_b64:
+                    description = await brain.think(
+                        "Describe what you see in this image concisely. "
+                        "List any objects, text, or people visible.",
+                        images=[image_b64],
+                    )
+                    return {
+                        "timestamp": time.time(),
+                        "scene_description": str(description or "").strip(),
+                        "objects_detected": [],
+                        "text_detected": [],
+                        "faces_detected": 0,
+                    }
+        except Exception as e:
+            logger.debug("Vision analysis via brain failed: %s", e)
+
+        # Fallback: no vision model available
+        return {
+            "timestamp": time.time(),
+            "objects_detected": [],
+            "scene_description": "No vision model available for analysis.",
+            "text_detected": [],
+            "faces_detected": 0,
+        }
 
 
 class HearingSystem:
