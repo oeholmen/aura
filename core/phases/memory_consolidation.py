@@ -226,7 +226,7 @@ class MemoryConsolidationPhase(BasePhase):
                 "timestamp": float(time.time())
             })
         
-        # vResilience: Enforce cap on evolution log (BUG-017)
+        # Enforce cap on evolution log
         from ..state.aura_state import MAX_EVOLUTION_LOG
         if new_state.cold is not None and len(new_state.cold.evolution_log) > MAX_EVOLUTION_LOG:
             # vResilience: Workaround for slice limitations

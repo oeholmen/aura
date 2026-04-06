@@ -96,15 +96,32 @@ class AutonomicCore:
             logger.debug("Vitals check failed: %s", e)
 
     async def _enforce_governance(self):
-        """Immune System / Process watchdog logic."""
-        # Future expansion: Monitor runaway threads or hung processes
-        pass
+        """Immune system watchdog: detect runaway threads and hung processes."""
+        try:
+            import threading
+            active = threading.active_count()
+            if active > 200:
+                logger.warning("Thread count high (%d) — possible leak.", active)
+                if self.orchestrator:
+                    self.orchestrator.status.memory_pressure = True
+        except Exception as e:
+            logger.debug("Governance check failed: %s", e)
         
     async def _unload_llm(self):
-        """Attempts to unload local models to free VRAM/RAM."""
-        # Ollama unload logic removed in v5.1.
-        # Future: Integrate with MLX Worker to purge model cache if memory is critical.
-        logger.info("🧠 Requesting local model memory optimization...")
+        """Request local model unload to free VRAM/RAM under memory pressure."""
+        logger.info("Requesting local model memory optimization...")
+        try:
+            from core.container import ServiceContainer
+            mlx_client = ServiceContainer.get("mlx_client", default=None)
+            if mlx_client and hasattr(mlx_client, "unload"):
+                await mlx_client.unload()
+                logger.info("MLX model unloaded to reclaim memory.")
+                return
+            # Fallback: force garbage collection of model tensors
+            import gc
+            gc.collect()
+        except Exception as e:
+            logger.debug("Model unload failed: %s", e)
 
     async def _check_survival(self):
         """Phase 8: Check for existential threats via SurvivalDriver."""

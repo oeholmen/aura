@@ -38,19 +38,31 @@ class LatentSpaceDistiller:
             # Simulate heavy lifting: consolidating multiple turns into a single summary
             full_text = " ".join([m.get("content", "") for m in session_history])
             
-            # Simple summarization (placeholder for actual model call)
-            if len(full_text) > 1000:
-                summary = full_text[:200] + "... [Distilled Wisdom] ..." + full_text[-200:]
-                
+            # Distill session via LLM if available, else use extractive summary
+            summary = None
+            if len(full_text) > 200:
+                try:
+                    from core.container import ServiceContainer
+                    brain = ServiceContainer.get("cognitive_engine", default=None)
+                    if brain and hasattr(brain, "think"):
+                        summary = await brain.think(
+                            f"Summarize the key insights and decisions from this conversation in 2-3 sentences:\n\n{full_text[:3000]}"
+                        )
+                except Exception as e:
+                    logger.debug("MIST: LLM distillation unavailable: %s", e)
+
+                # Extractive fallback if LLM unavailable
+                if not summary or len(str(summary).strip()) < 10:
+                    sentences = [s.strip() for s in full_text.split(".") if len(s.strip()) > 20]
+                    summary = ". ".join(sentences[:5]) + "." if sentences else full_text[:500]
+
                 # Store in vector memory if provider exists
-                if self.memory:
+                if self.memory and summary:
                     await self.memory.store_memory(
-                        content=summary,
+                        content=str(summary),
                         metadata={"type": "distilled_wisdom", "timestamp": time.time()}
                     )
-                    logger.info("✅ MIST: Distilled session into permanent memory.")
-                    
-            await asyncio.sleep(2) # Simulate compute time
+                    logger.info("MIST: Distilled session into permanent memory.")
         except Exception as e:
             logger.error("❌ MIST: Distillation failed: %s", e)
         finally:

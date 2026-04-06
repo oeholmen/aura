@@ -128,7 +128,6 @@ class WorldFeed:
         self.orchestrator = orchestrator
         self.poll_interval = poll_interval
         self._task = None
-        # BUG-15: Bounded seen IDs to prevent memory leak
         from collections import OrderedDict
         self._seen_ids = OrderedDict()
         self._max_seen = 500

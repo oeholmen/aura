@@ -34,7 +34,7 @@ class NucleusManager(LLMProvider):
         self._refresh_threshold = 2048 
         self._tokens_seen = 0
         self._listener_task = None
-        # BUG-11: Defer event subscription to avoid create_task in __init__
+        # Defer event subscription to avoid create_task in __init__
         try:
             from core.event_bus import get_event_bus
             self.bus = get_event_bus()
@@ -62,7 +62,7 @@ class NucleusManager(LLMProvider):
         
     async def load_model(self, name: str):
         """Lazy load a specific internal model, including LoRA adapters if present."""
-        # BUG-11: Ensure event listener is started from async context
+        # Ensure event listener is started from async context
         await self.ensure_listener_started()
         logger.debug("Attempting to load: %s", name)
         if self.models.get(name, {}).get("loaded"): # Use .get for safety if brainstem is removed from models dict

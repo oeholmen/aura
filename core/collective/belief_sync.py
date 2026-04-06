@@ -267,7 +267,7 @@ class BeliefSync:
         elif method == "receive_principles":
             await self.handle_incoming_principles(params)
             return {"status": "ok"}
-        return {"error": "Method recognized but not implemented"}
+        return {"error": f"Unknown sync method: {method}"}
 
     async def handle_incoming_resonance(self, payload: Dict[str, Any]):
         """Phase 18.1: Handle incoming drive states (Resonance)."""

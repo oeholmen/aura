@@ -62,7 +62,7 @@ class AutonomousInitiativeLoop:
             name="KnowledgeGapMonitor"
         )
 
-        # Subscribe to proactive initiations from Jarvis/Fictional Engine (BUG-032)
+        # Subscribe to proactive initiations from Fictional Engine
         try:
             from core.service_names import ServiceNames
             bus = optional_service(ServiceNames.EVENT_BUS, default=None)

@@ -100,7 +100,7 @@ class NarrativeEngine:
                     )
                     logger.info("📔 Journal Entry recorded.")
                 
-                # Tier 3: Pruning (BUG-07: actually delete episodes from storage)
+                # Tier 3: Pruning — delete consolidated episodes from storage
                 logger.info("✂️ [NARRATIVE-T3] Pruning %d consolidated episodes.", len(recent_episodes))
                 await episodic.delete_episodes_async([ep.episode_id for ep in recent_episodes])
                 

@@ -416,30 +416,47 @@ class AVProductionSystem:
     def __init__(self):
         pass
     
-    def create_image(self, description: str, style: str = "realistic") -> Dict[str, Any]:
-        """Generate image from description.
-        
-        Would integrate with:
-        - DALL-E
-        - Stable Diffusion
-        - Midjourney API
-        """
-        return {
-            "error": "image_generation_not_implemented",
-            "note": "Integrate with DALL-E or Stable Diffusion"
-        }
-    
-    def edit_video(self, video_path: str, edits: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Edit video with specified operations.
-        
-        Would integrate with:
-        - FFmpeg
-        - MoviePy
-        """
-        return {
-            "error": "video_editing_not_implemented",
-            "note": "Integrate with FFmpeg or MoviePy"
-        }
+    async def create_image(self, description: str, style: str = "realistic") -> Dict[str, Any]:
+        """Generate image via local Stable Diffusion or brain inference."""
+        try:
+            from core.container import ServiceContainer
+            brain = ServiceContainer.get("cognitive_engine", default=None)
+            if brain and hasattr(brain, "generate_image"):
+                result = await brain.generate_image(description, style=style)
+                if result:
+                    return {"path": result, "description": description, "timestamp": time.time()}
+        except Exception as e:
+            logger.debug("Image generation via brain failed: %s", e)
+
+        return {"error": "no_image_model", "description": description}
+
+    async def edit_video(self, video_path: str, edits: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Apply edits to video via FFmpeg."""
+        import shutil
+        if not shutil.which("ffmpeg"):
+            return {"error": "ffmpeg_not_installed"}
+
+        import subprocess
+        try:
+            # Basic trim operation as baseline
+            for edit in edits:
+                if edit.get("type") == "trim":
+                    start = edit.get("start", 0)
+                    end = edit.get("end")
+                    output = video_path.rsplit(".", 1)[0] + "_edited.mp4"
+                    cmd = ["ffmpeg", "-y", "-i", video_path, "-ss", str(start)]
+                    if end:
+                        cmd.extend(["-to", str(end)])
+                    cmd.extend(["-c", "copy", output])
+                    proc = await asyncio.to_thread(
+                        subprocess.run, cmd, capture_output=True, timeout=60
+                    )
+                    if proc.returncode == 0:
+                        return {"path": output, "edits_applied": len(edits)}
+                    return {"error": proc.stderr.decode()[:200]}
+            return {"error": "no_supported_edits", "supported": ["trim"]}
+        except Exception as e:
+            return {"error": str(e)}
 
 
 _sensory_lock = threading.Lock()

@@ -263,10 +263,17 @@ Sound like yourself. Be direct. You can note if your thinking has evolved."""
                         if not existing or existing.confidence < 0.5:
                             return topic
 
-        # Fallback: pick from topics mentioned in context
+        # Fallback: extract candidate topic from context via simple NLP
         if context and len(context) > 20:
-             # simple regex to find nouns/topics would be better, but this is a stub
-            return context[:50].split()[-1] if len(context.split()) > 0 else None
+            import re
+            # Extract capitalized phrases or quoted terms as likely topics
+            candidates = re.findall(r'"([^"]+)"|\'([^\']+)\'|(?<!\. )([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)*)', context[:200])
+            flat = [c for group in candidates for c in group if c]
+            if flat:
+                return flat[0]
+            # Last resort: longest word in first sentence
+            words = [w for w in context.split(".")[ 0].split() if len(w) > 3 and w[0].isalpha()]
+            return max(words, key=len) if words else None
 
         return None
 
