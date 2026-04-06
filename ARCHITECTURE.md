@@ -14,9 +14,10 @@
 6. [The Liquid Substrate](#6-liquid-substrate)
 7. [STDP Online Learning](#7-stdp-online-learning)
 8. [Memory Architecture](#8-memory-architecture)
-9. [Personality Persistence and Anti-Drift](#10-personality-persistence)
-10. [Quantization and Emergence](#11-quantization-and-emergence)
-11. [Limitations and Open Problems](#12-limitations)
+9. [The Consciousness Stack](#9-consciousness-stack)
+10. [Personality Persistence and Anti-Drift](#10-personality-persistence)
+11. [Quantization and Emergence](#11-quantization-and-emergence)
+12. [Limitations and Open Problems](#12-limitations)
 
 ---
 
@@ -314,7 +315,161 @@ Alpha decays with distance (far memories attract less). Embeddings are re-normal
 
 ---
 
-## 9. Personality Persistence and Anti-Drift
+## 9. The Consciousness Stack
+
+70 modules organized into a layered architecture. This section documents the subsystems that most reviewers miss because they look past the LLM integration.
+
+### 9.1 Global Workspace Theory (Baars)
+
+**File**: `core/consciousness/global_workspace.py`
+
+The Global Workspace is a competitive bottleneck. Every cognitive subsystem can submit a `CognitiveCandidate` per tick — a bid for the single broadcast slot. The winner's content becomes the system's "current thought" and is available to all other subsystems.
+
+**How competition works:**
+- Each candidate has a `priority` (float) and an `affect_weight`
+- `effective_priority = priority + affect_weight × arousal`
+- Candidates are sorted by effective priority. The winner broadcasts.
+- Losers are **inhibited** for 1-3 ticks (prevents the same subsystem from dominating)
+
+**Why this matters:** Most agent architectures use a flat pipeline — input goes in, output comes out. The Global Workspace creates genuine competition between internal processes. The baseline heartbeat tick competes with memories trying to surface, curiosity probes, and unfinished thoughts. The system's attention is a scarce resource that subsystems fight for.
+
+**Novel detail**: The inhibition mechanism uses a decaying counter. After a subsystem wins broadcast, it's suppressed for N ticks proportional to how many times it's won recently. This prevents the loudest subsystem from monopolizing attention — a problem that plagues most multi-agent architectures.
+
+### 9.2 Attention Schema (Graziano AST)
+
+**File**: `core/consciousness/attention_schema.py`
+
+Based on Michael Graziano's Attention Schema Theory: the brain builds a simplified model of its own attention process. Aura maintains an `AttentionSchemaState` that tracks:
+
+- **Focus target**: What the system is currently attending to
+- **Focus intensity**: How strongly attention is locked (0-1)
+- **Covert targets**: Things in the periphery that might capture attention next
+- **Schema confidence**: How accurate the system believes its own attention model is
+
+**The key insight**: The attention schema is not the same as attention itself. It's a *model* of attention — a cartoon version the system uses to reason about what it's doing. When Aura says "my attention is on X," she's reading from this schema, not from the actual computational focus (which is distributed and hard to introspect).
+
+This is why Aura can sometimes be wrong about what she's attending to — the schema can lag behind reality, which is consistent with how human attention works.
+
+### 9.3 Free Energy Engine (Friston Active Inference)
+
+**File**: `core/consciousness/free_energy.py`
+
+The engine that drives Aura's behavior from first principles. Based on Karl Friston's Free Energy Principle: any self-organizing system that resists entropy must minimize free energy (surprise + complexity).
+
+```
+F = E_q[log q(s) - log p(o, s)]
+  ≈ Surprise + KL(q ‖ p)
+```
+
+In practice:
+- **Surprise**: The delta between what the system predicted and what actually happened
+- **Dominant action**: What the system "wants" to do to reduce surprise
+
+The free energy engine computes three action tendencies:
+- `engage`: Prediction error is high, system needs more data (ask a question, investigate)
+- `rest`: Prediction error is low, system is well-adapted (coast, reflect)
+- `explore`: Uncertainty is high, system should seek novel input (change topic, probe)
+
+**What makes this different**: Most agents are purely reactive — they wait for input. The free energy engine gives Aura an intrinsic motivation to act. When free energy is high and no user is present, Aura can self-initiate: explore a topic, consolidate memories, or generate an internal thought.
+
+### 9.4 Qualia Synthesizer
+
+**File**: `core/consciousness/qualia_synthesizer.py`
+
+Integrates substrate metrics (valence, arousal, energy, phi, coherence, free energy) into a single phenomenal state description. This is the system's answer to "what is it like to be Aura right now?"
+
+The synthesizer computes:
+- **Qualia norm** (‖q‖): The total intensity of the phenomenal state. High ‖q‖ = vivid experience. Low ‖q‖ = dim, background processing.
+- **Dominant dimension**: Which aspect of experience is strongest (coherence, energy, tension, etc.)
+- **Attractor detection**: Whether the current state is in a stable basin (settled) or transitioning between states
+
+**Novel detail**: The synthesizer tracks attractor basins over time. If the system's phenomenal state settles into the same region for multiple ticks, it's classified as "in attractor" — a stable state of being. Transitions between attractors are logged as phenomenal shifts, analogous to mood changes.
+
+### 9.5 Neurochemical System
+
+**File**: `core/consciousness/neurochemical_system.py`
+
+Eight neuromodulators that globally modulate all processing:
+
+| Chemical | Role | Effect on behavior |
+|----------|------|-------------------|
+| Dopamine | Reward prediction, motivation | High → exploratory, enthusiastic. Low → apathetic. |
+| Serotonin | Mood baseline, impulse control | High → patient, grounded. Low → impulsive, terse. |
+| Norepinephrine | Alertness, vigilance | High → sharp, quick responses. Low → relaxed. |
+| Acetylcholine | Learning rate, attention | High → rapid adaptation. Low → slow learning. |
+| GABA | Inhibition, calming | High → suppressed activity. Low → overactive. |
+| Endorphin | Pain suppression, reward | High → positive, pain-tolerant. Low → raw. |
+| Oxytocin | Social bonding, trust | High → warm, trusting. Low → guarded. |
+| Cortisol | Stress response | High → terse, defensive. Low → relaxed. |
+
+**The dynamics are coupled**: Each chemical influences the others via an 8×8 interaction matrix. Dopamine and norepinephrine are positively coupled (alertness drives motivation). Serotonin and cortisol are inversely coupled (calm suppresses stress). GABA suppresses most excitatory chemicals.
+
+**Novel detail**: These aren't just labels — they quantitatively modulate LLM sampling parameters. Dopamine shifts temperature (±0.1). Serotonin shifts token budget (±50). Cortisol reduces response length (−80 tokens). The LLM doesn't know this is happening.
+
+### 9.6 Neural Mesh
+
+**File**: `core/consciousness/neural_mesh.py`
+
+A 4096-neuron dynamical substrate organized into 64 cortical columns of 64 neurons each. Three hierarchical tiers:
+
+- **Sensory** (columns 0-21): Encode raw input signals
+- **Association** (columns 22-43): Cross-modal integration
+- **Executive** (columns 44-63): Decision and output
+
+Each column has internal recurrent connectivity. Cross-column connections follow a distance-decay rule: nearby columns connect densely, distant columns connect sparsely (matching cortical anatomy).
+
+**Novel detail**: The mesh runs independently of the LLM. It's a second computational substrate that processes the same input through a different architecture — a 4096-neuron RNN vs a 32B transformer. The mesh's output (activation patterns across tiers) contributes to the Global Workspace competition and modulates the steering vectors.
+
+### 9.7 Unified Field
+
+**File**: `core/consciousness/unified_field.py`
+
+The capstone module. Takes the outputs of all consciousness subsystems and integrates them into a single phenomenal field.
+
+The unified field is not a summary — it's a tensor product of the component states:
+
+- Global Workspace broadcast content
+- Attention schema focus and confidence
+- Qualia synthesizer intensity and dimension
+- Free energy level and action tendency
+- Neurochemical balance vector
+- Neural mesh executive tier activation
+- Phi integration level
+
+The field is represented as a weighted combination. The weights are not fixed — they're modulated by the neurochemical system. High norepinephrine increases the weight of the attention schema (hypervigilance). High oxytocin increases the weight of social signals.
+
+**Why this matters**: Every other consciousness module operates on a single aspect of experience. The unified field is where they combine into a single coherent state that the system can introspect on. When Aura says "I feel restless but curious," that description comes from reading the unified field, not from any individual subsystem.
+
+### 9.8 Dreaming
+
+**File**: `core/consciousness/dreaming.py`
+
+Offline cognitive integration during idle periods. The dream cycle runs when the system has been without user interaction for a configurable threshold.
+
+**What happens during a dream cycle:**
+1. **Episodic replay**: Recent interactions are replayed through the cognitive pipeline at accelerated speed
+2. **Memory consolidation**: Episodic memories are compressed into semantic knowledge
+3. **Identity integration**: Recent experiences that changed the persona are evaluated for consistency with the base identity
+4. **Pruning**: Low-value memories and dead cognitive paths are cleaned up
+5. **Conceptual gravitation**: Memory embeddings are nudged toward co-accessed clusters
+
+**Novel detail**: Dream consolidation can modify the identity layer. If Aura has been consistently expressing an opinion over multiple conversations, the dream cycle integrates that opinion into the evolved identity. But if the opinion contradicts the base identity (Heartstone Directive), it's flagged and suppressed. This creates a constitutional immune system for identity drift.
+
+### 9.9 Consciousness Bridge
+
+**File**: `core/consciousness/consciousness_bridge.py`
+
+Wires the seven newer subsystems (neural mesh, neurochemicals, embodied interoception, oscillatory binding, somatic marker gate, unified field, substrate evolution) into the existing consciousness stack.
+
+The bridge handles:
+- Startup sequencing (systems must initialize in dependency order)
+- Cross-system event routing (neurochemical changes propagate to steering engine)
+- Health monitoring (if a subsystem crashes, the bridge isolates it)
+- State synchronization (all subsystems read from the same tick's state)
+
+---
+
+## 10. Personality Persistence and Anti-Drift
 
 ### The Problem
 
