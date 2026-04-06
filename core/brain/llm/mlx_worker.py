@@ -234,11 +234,27 @@ def _mlx_worker_loop(
     # ZENITH: Local Concurrency Gate
     metal_semaphore = threading.Semaphore(1)
 
-    # Load model (SINGLE load — previously was duplicated)
+    # Load model with personality LoRA adapter if available
     try:
+        adapter_path = os.environ.get("AURA_LORA_PATH")
+        if not adapter_path:
+            # Check default location
+            _default_adapter = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+                "training", "adapters", "aura-personality", "adapters.safetensors"
+            )
+            if os.path.exists(_default_adapter):
+                adapter_path = os.path.dirname(_default_adapter)
+                logger.info(f"Found personality LoRA adapter: {adapter_path}")
+
         logger.info(f"Loading model: {model_path}")
-        model, tokenizer = load(model_path)
-        logger.info(f"Model loaded successfully (device={device}).")
+        if adapter_path and os.path.isdir(adapter_path):
+            logger.info(f"Loading with LoRA adapter: {adapter_path}")
+            model, tokenizer = load(model_path, adapter_path=adapter_path)
+            logger.info("Model loaded with Aura personality LoRA fused.")
+        else:
+            model, tokenizer = load(model_path)
+            logger.info(f"Model loaded (no LoRA adapter).")
 
         # Attach Affective Steering
         try:

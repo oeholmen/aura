@@ -620,33 +620,53 @@ class LiquidSubstrate:
             logger.debug("RIIU Φ computation skipped: %s", e)
 
     async def _apply_plasticity(self):
-        """Hebbian learning: Neurons that fire together, wire together.
-        Phase 5 Upgrade: Long-term Calibration (Neural Resonance).
+        """Reward-modulated STDP + Hebbian learning.
+
+        Two learning signals are combined:
+        1. Base Hebbian (coactivity-driven, always active)
+        2. STDP modulated by prediction error from free energy engine
+           (BrainCog-inspired: high surprise → faster learning)
         """
         with self.sync_lock:
             # Numerical Stability: Use tanh on coactivity to prevent runaway growth
             coactivity = np.tanh(np.outer(self.x, self.x))
-            
+
             # 1. Base Hebbian update
             self.W += self.config.hebbian_rate * coactivity
-            
-            # 2. Neural Resonance: Slow weight calibration towards high-phi states
+
+            # 2. STDP reward-modulated learning (from BrainCog research)
+            try:
+                from core.container import ServiceContainer
+                stdp = ServiceContainer.get("stdp_engine", default=None)
+                if stdp is not None:
+                    # Record current activations as spikes
+                    stdp.record_spikes(self.x, t=self.tick_count * 50.0)
+
+                    # Get prediction error from free energy engine
+                    fe_engine = ServiceContainer.get("free_energy_engine", default=None)
+                    if fe_engine is not None:
+                        current = getattr(fe_engine, "current", None)
+                        if current is not None:
+                            surprise = float(getattr(current, "surprise", 0.0))
+                            pred_error = float(getattr(current, "prediction_error", 0.0))
+                            dw = stdp.deliver_reward(surprise, pred_error)
+                            self.W = stdp.apply_to_connectivity(self.W, dw)
+            except Exception as e:
+                logger.debug("STDP plasticity step skipped: %s", e)
+
+            # 3. Neural Resonance: Slow weight calibration towards high-phi states
             if hasattr(self, '_current_phi') and self._current_phi > 0.5:
-                # Strengthen connections that contribute to high integration
                 resonance_gain = self.config.hebbian_rate * 0.1
-                # Limit phi impact to avoid explosion
                 limited_phi = min(10.0, self._current_phi)
                 self.W += resonance_gain * coactivity * limited_phi
-            
-            # Purge any NaN/Inf before normalization
+
+            # Purge NaN/Inf
             self.W = np.nan_to_num(self.W, nan=0.0, posinf=5.0, neginf=-5.0)
 
-            # Normalization & Defensive Clipping
+            # Normalization & clipping
             norm = np.linalg.norm(self.W)
             if norm > 10.0:
                 self.W *= (10.0 / norm)
-
-            # Final safety clip to prevent NaN/Inf spillover
             self.W = np.clip(self.W, -5.0, 5.0)
 
     async def long_term_calibration(self, resonance_vector: np.ndarray):

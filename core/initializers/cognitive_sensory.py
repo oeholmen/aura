@@ -28,6 +28,39 @@ def init_cognitive_sensory_layer(container):
     except Exception as e:
         logger.debug("Continuous vision init deferred: %s", e)
 
+    # Research-inspired memory systems
+    try:
+        from core.memory.conceptual_gravitation import get_gravitation_engine
+        grav = get_gravitation_engine()
+        container.register_instance("conceptual_gravitation", grav, required=False)
+        logger.debug("Conceptual gravitation engine registered.")
+    except Exception as e:
+        logger.debug("Conceptual gravitation init deferred: %s", e)
+
+    try:
+        from core.memory.knowledge_compression import get_knowledge_compressor
+        compressor = get_knowledge_compressor()
+        container.register_instance("knowledge_compressor", compressor, required=False)
+        logger.debug("Knowledge compressor registered.")
+    except Exception as e:
+        logger.debug("Knowledge compressor init deferred: %s", e)
+
+    try:
+        from core.memory.navigating_graph import get_navigating_graph
+        nsg = get_navigating_graph()
+        container.register_instance("navigating_graph", nsg, required=False)
+        logger.debug("Navigating graph registered.")
+    except Exception as e:
+        logger.debug("Navigating graph init deferred: %s", e)
+
+    try:
+        from core.consciousness.stdp_learning import get_stdp_engine
+        stdp = get_stdp_engine()
+        container.register_instance("stdp_engine", stdp, required=False)
+        logger.debug("STDP learning engine registered.")
+    except Exception as e:
+        logger.debug("STDP engine init deferred: %s", e)
+
     # Code graph — Aura's self-knowledge of her own codebase
     try:
         from core.introspection.code_graph import get_code_graph
