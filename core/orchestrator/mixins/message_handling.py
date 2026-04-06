@@ -60,11 +60,90 @@ class MessageHandlingMixin:
             logger.error("Error acquiring message from queue: %s", e)
             return None
 
-    async def _defer_enqueue_message(self, message: Any, priority: int, origin: str, delay: float):
+    async def _defer_enqueue_message(
+        self,
+        message: Any,
+        priority: int,
+        origin: str,
+        delay: float,
+        *,
+        _authority_checked: bool = False,
+    ):
         await asyncio.sleep(delay)
-        self.enqueue_message(message, priority=priority, origin=origin, _flow_checked=True)
+        self.enqueue_message(
+            message,
+            priority=priority,
+            origin=origin,
+            _flow_checked=True,
+            _authority_checked=_authority_checked,
+        )
 
-    def enqueue_message(self, message: Any, priority: int = 20, origin: str = "background", _flow_checked: bool = False):
+    def _background_enqueue_summary(self, message: Any, origin: str) -> str:
+        payload = message
+        tool_hint = ""
+        if isinstance(payload, dict):
+            context = dict(payload.get("context") or {})
+            hint = dict(context.get("intent_hint") or {})
+            tool = str(hint.get("tool") or "").strip()
+            if tool:
+                tool_hint = f"{tool}:"
+            payload = (
+                payload.get("content")
+                or payload.get("message")
+                or payload.get("objective")
+                or payload.get("thought")
+                or payload
+            )
+        return f"enqueue:{origin}:{tool_hint}{str(payload or '')[:160]}"
+
+    def _authorize_background_enqueue_sync(self, message: Any, origin: str, priority: int) -> bool:
+        summary = self._background_enqueue_summary(message, origin)
+        current_state = getattr(getattr(self, "state_repo", None), "_current", None)
+        try:
+            from core.constitution import get_constitutional_core
+
+            approved, reason = get_constitutional_core(self).approve_initiative_sync(
+                summary,
+                source=origin,
+                urgency=max(0.05, min(1.0, float(priority) / 100.0)),
+                state=current_state,
+            )
+        except Exception as exc:
+            approved = False
+            reason = f"background_enqueue_gate_failed:{type(exc).__name__}"
+
+        if approved:
+            return True
+
+        try:
+            from core.health.degraded_events import record_degraded_event
+
+            event_reason = "background_enqueue_blocked"
+            if any(
+                marker in str(reason or "")
+                for marker in ("gate_failed", "required", "unavailable")
+            ):
+                event_reason = "background_enqueue_gate_failed"
+            record_degraded_event(
+                "message_queue",
+                event_reason,
+                detail=summary[:160],
+                severity="warning",
+                classification="background_degraded",
+                context={"origin": origin, "priority": priority, "reason": reason},
+            )
+        except Exception as exc:
+            logger.debug("Background enqueue degraded-event logging failed: %s", exc)
+        return False
+
+    def enqueue_message(
+        self,
+        message: Any,
+        priority: int = 20,
+        origin: str = "background",
+        _flow_checked: bool = False,
+        _authority_checked: bool = False,
+    ):
         """Standard interface for injecting messages into the core loop."""
         if not _flow_checked and hasattr(self, "_flow_controller") and self._flow_controller:
             decision = self._flow_controller.admit(self, origin=origin, priority=priority)
@@ -84,6 +163,7 @@ class MessageHandlingMixin:
                             priority=priority,
                             origin=origin,
                             delay=decision.defer_seconds,
+                            _authority_checked=_authority_checked,
                         ),
                         name="DeferredEnqueue",
                     )
@@ -103,6 +183,10 @@ class MessageHandlingMixin:
             self._last_user_interaction_time = time.time()
             return
 
+        if not _authority_checked and not self._authorize_background_enqueue_sync(message, origin, priority):
+            logger.info("🛡️ Background enqueue blocked for %s.", origin)
+            return False
+
         try:
             # Zenith v47 Hardening: Deeply sanitize all messages before they enter
             # the queue to prevent circular references in AuraState.
@@ -118,7 +202,13 @@ class MessageHandlingMixin:
                            str(message)[:120])
             return False
 
-    def enqueue_from_thread(self, message: Any, origin: str = "user", priority: int = 10):
+    def enqueue_from_thread(
+        self,
+        message: Any,
+        origin: str = "user",
+        priority: int = 10,
+        _authority_checked: bool = False,
+    ):
         """Safely enqueue a message from a synchronous thread to the async loop."""
         if hasattr(self, "_flow_controller") and self._flow_controller:
             decision = self._flow_controller.admit(self, origin=origin, priority=priority)
@@ -130,6 +220,11 @@ class MessageHandlingMixin:
                 )
                 return
             priority = decision.priority
+
+        if not self._is_user_facing_origin(origin) and not _authority_checked:
+            if not self._authorize_background_enqueue_sync(message, origin, priority):
+                logger.info("🛡️ Background threaded enqueue blocked for %s.", origin)
+                return
 
         # Zenith v47 Hardening: Deeply sanitize all messages before they enter the queue
         message = self._deep_circular_safe_sanitize(message)
@@ -264,7 +359,7 @@ class MessageHandlingMixin:
     def _emit_dispatch_telemetry(self, message: Any):
         """Log dispatch event to thought stream."""
         try:
-            from ..thought_stream import get_emitter
+            from ...thought_stream import get_emitter
             safe_msg = str(message)[:1000] # Cap message size for telemetry
             get_emitter().emit("dispatch", f"Processing message: {safe_msg}")
 
@@ -335,7 +430,7 @@ class MessageHandlingMixin:
 
     async def _process_user_input_core(self, message: str, origin: str = "user") -> Optional[str]:
         """Actual processing logic — never calls itself, never recurses."""
-        from ..container import ServiceContainer
+        from ...container import ServiceContainer
 
         normalized_message = str(message or "").strip()
         if not normalized_message:
@@ -374,7 +469,7 @@ class MessageHandlingMixin:
             self._current_task_is_autonomous = False
             self.status.is_processing = True
             self._last_user_interaction_time = time.time()
-            self._extend_foreground_quiet_window(15.0)
+            self._extend_foreground_quiet_window(5.0)
             self._publish_telemetry({"event": "thinking", "origin": origin, "interim": True})
             self._publish_telemetry({"type": "status", "is_processing": True, "is_idle": False})
 
@@ -499,7 +594,7 @@ class MessageHandlingMixin:
                 return response
             finally:
                 self.status.is_processing = False
-                self._extend_foreground_quiet_window(8.0)
+                self._extend_foreground_quiet_window(3.0)
                 if getattr(self, "_current_thought_task", None) is current_task:
                     self._current_thought_task = None
                     self._current_origin = ""

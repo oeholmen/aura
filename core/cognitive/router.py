@@ -10,6 +10,10 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, Union, Dict, List
 
 from core.config import config
+from core.health.degraded_events import record_degraded_event
+from core.runtime.governance_policy import allow_intent_hint_bypass
+from core.runtime.service_access import optional_service
+from core.runtime.turn_analysis import analyze_turn
 
 if TYPE_CHECKING:
     from core.brain.types import LLMClient
@@ -28,12 +32,18 @@ class IntentRouter:
     """Classifies user input to determine the strict State Machine path."""
 
     def __init__(self) -> None:
-        from core.container import ServiceContainer
         # H-28 FIX: Explicit type hint for the protocol
-        self.llm: Optional[LLMClient] = ServiceContainer.get("llm_router", default=None)
+        self.llm: Optional[LLMClient] = optional_service("llm_router", default=None)
         
         if not self.llm:
             logger.warning("IntentRouter: No valid LLM generator found in container.")
+            record_degraded_event(
+                "intent_router",
+                "llm_router_missing",
+                detail="classification_falling_back_to_deterministic_analysis",
+                severity="info",
+                classification="non_critical_fallback",
+            )
 
     @lru_cache(maxsize=100)
     def _check_heuristics(self, lower_input: str) -> Optional[Intent]:
@@ -61,48 +71,39 @@ class IntentRouter:
         
         # Phase 37 v2: Sovereign Scanner & Agency Bypass
         if context and context.get("intent_hint"):
-            logger.info("⚡ IntentRouter: Bypassing classification due to intent_hint")
-            return Intent.SKILL
+            hint_origin = context.get("origin") or context.get("request_origin") or context.get("source")
+            if allow_intent_hint_bypass(context, hint_origin):
+                logger.info("⚡ IntentRouter: Using sanctioned constitutional intent_hint")
+                return Intent.SKILL
+            logger.info("🧭 IntentRouter: Ignoring unsanctioned intent_hint for governed classification")
 
         lower_input = user_input.lower().strip()
+        matched_skills = False
         
         # 1. Check Heuristics (Cached)
         heuristic_result = self._check_heuristics(lower_input)
         if heuristic_result:
             return heuristic_result
 
-        # 2. LLM Classification (Lightning Fast)
-        if not self.llm:
-            logger.warning("IntentRouter: LLM missing, defaulting to CHAT.")
-            return Intent.CHAT
-
-        system_prompt = (
-            "You are an intent classifier. Respond ONLY with one of the following words:\n"
-            "CHAT - General conversation, greetings, empathy, or answering basic questions.\n"
-            "SKILL - The user is asking you to perform an action, use a tool, search a file, search the web, or read/write data.\n"
-            "SYSTEM - The user is talking about restarting, shutting down, or managing your core systems.\n\n"
-            "Do not explain. Just output the single word."
-        )
-
         try:
-            # We enforce a tiny max_tokens to ensure it literally only outputs one word
-            response = await self.llm.generate(
-                prompt=user_input,
-                system_prompt=system_prompt,
-                max_tokens=10,
-                temperature=0.0 # Maximum determinism
-            )
-            
-            result = response.strip().upper()
-            
-            for intent in Intent:
-                if intent.value in result:
-                    logger.debug("Intent classified as %s", intent.value)
-                    return intent
-                    
-            logger.warning("Fuzzy intent match: '%s'. Defaulting to CHAT.", result)
-            return Intent.CHAT
-            
-        except Exception as e:
-            logger.error("Intent classification failed: %s", e)
-            return Intent.CHAT # Safe fallback
+            cap = optional_service("capability_engine", default=None)
+            if cap and hasattr(cap, "detect_intent"):
+                matched_skills = bool(cap.detect_intent(user_input))
+        except Exception as exc:
+            logger.debug("IntentRouter: capability pre-check failed: %s", exc)
+
+        analysis = analyze_turn(user_input, matched_skills=matched_skills)
+        mapping = {
+            "SYSTEM": Intent.SYSTEM,
+            "SKILL": Intent.SKILL,
+            "TASK": Intent.SKILL,
+            "CHAT": Intent.CHAT,
+        }
+        routed_intent = mapping.get(analysis.intent_type, Intent.CHAT)
+        logger.debug(
+            "IntentRouter: deterministic route=%s semantic=%s live_voice=%s",
+            routed_intent.value,
+            analysis.semantic_mode,
+            analysis.requires_live_aura_voice,
+        )
+        return routed_intent

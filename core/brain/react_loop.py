@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from core.runtime.governance_policy import allow_simple_query_bypass
+
 logger = logging.getLogger("Aura.ReActLoop")
 
 
@@ -480,7 +482,7 @@ class ReActLoop:
         yield {"type": "status", "content": f"Aura is analyzing: {query[:30]}..."}
 
         # Fast path: trivial queries skip the loop
-        if self._is_simple_query(query):
+        if self._is_simple_query(query) and allow_simple_query_bypass(query, context):
             logger.debug("ReAct: Simple query detected, bypassing reasoning loop")
             try:
                 from core.brain.cognitive_engine import ThinkingMode
@@ -493,6 +495,8 @@ class ReActLoop:
                 return
             except Exception as e:
                 logger.error("Simple query fast path failed: %s", e)
+        elif self._is_simple_query(query):
+            logger.debug("ReAct: Simple query detected but staying on the governed reasoning path")
 
         logger.info("🧠 ReAct: Starting reasoning loop for: %s...", query[:50])
 
@@ -644,4 +648,3 @@ class ReActLoop:
             
         async for event in self._run_generator(query, context):
             yield event
-

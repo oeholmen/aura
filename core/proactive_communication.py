@@ -76,10 +76,10 @@ class ProactiveMessage:
             
         # Thresholds based on urgency
         thresholds = {
-            InterruptionUrgency.HIGH: 30,      # 30 seconds
-            InterruptionUrgency.MEDIUM: 120,   # 2 minutes
-            InterruptionUrgency.LOW: 300,      # 5 minutes
-            InterruptionUrgency.TRIVIAL: 600   # 10 minutes
+            InterruptionUrgency.HIGH: 15,      # 15 seconds
+            InterruptionUrgency.MEDIUM: 45,    # 45 seconds
+            InterruptionUrgency.LOW: 90,       # 90 seconds
+            InterruptionUrgency.TRIVIAL: 180   # 3 minutes
         }
         
         required_idle = thresholds.get(self.urgency, 600)
@@ -279,12 +279,13 @@ class ProactiveCommunicationManager:
 
     def get_boredom_level(self) -> float:
         idle = time.time() - self.last_interaction_time
-        
-        # Base boredom from idle time
-        if idle < 120: base = idle / 600
-        elif idle < 300: base = 0.2 + (idle - 120) / 450
-        else: base = min(0.6 + (idle - 300) / 600, 1.0)
-        
+
+        # Boredom ramps up meaningfully within the first few minutes
+        if idle < 30: base = idle / 300          # 0→0.1 over 30s
+        elif idle < 90: base = 0.1 + (idle - 30) / 150   # 0.1→0.5 over next 60s
+        elif idle < 180: base = 0.5 + (idle - 90) / 180  # 0.5→1.0 over next 90s
+        else: base = 1.0
+
         # Boredom scales with idle time and environmental entropy
         return base
 

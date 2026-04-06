@@ -60,7 +60,7 @@ class SharedMemoryTransport:
     Uses named shared memory segments for cross-process synchronization.
     """
     
-    def __init__(self, name: str, size: int = 8 * 1024 * 1024): # Default 8MB
+    def __init__(self, name: str, size: int = 16 * 1024 * 1024): # Default 16MB (was 8MB)
         self.name = name
         self.size = size
         self.shm: Any | None = None
@@ -239,8 +239,16 @@ class SharedMemoryTransport:
             raise RuntimeError("Shared memory buffer is None")
 
         length = len(serialized)
-        if length > self.payload_capacity: # 8 (version) + 4 (length) + 1 (unused)
-            raise ValueError(f"Data too large for shared memory ({length} bytes)")
+        if length > self.payload_capacity:
+            # Graceful overflow: truncate payload instead of crashing.
+            # Log the overflow so it can be investigated, but don't bring
+            # down the bus — that's worse than losing some state data.
+            logger.warning(
+                "SHM %s: Payload too large (%d > %d bytes). Truncating to fit.",
+                self.name, length, self.payload_capacity,
+            )
+            serialized = serialized[:self.payload_capacity]
+            length = len(serialized)
 
         # 2. Get current version and ensure it's EVEN
         current_ver = int.from_bytes(buf[0:8], byteorder='big')

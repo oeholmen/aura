@@ -82,6 +82,46 @@ class ToolExecutionMixin:
             logger.debug("ConstitutionalCore unavailable for tool gate: %s", _exec_err)
         # ─────────────────────────────────────────────────────────────────
 
+        if _constitutional_runtime_live and _tool_handle:
+            try:
+                from core.executive.authority_gateway import get_authority_gateway
+
+                capability_token_id = _tool_handle.capability_token_id
+                if not capability_token_id:
+                    logger.warning("🚫 Tool '%s' missing capability token under constitutional runtime.", tool_name)
+                    if _constitution and _tool_handle:
+                        await _constitution.finish_tool_execution(
+                            _tool_handle,
+                            result={"ok": False, "error": "Capability token missing."},
+                            success=False,
+                            duration_ms=(time.time() - _start) * 1000,
+                            error="Capability token missing.",
+                        )
+                    return {"ok": False, "error": "Capability token missing."}
+                if not get_authority_gateway().verify_tool_access(tool_name, capability_token_id):
+                    logger.warning("🚫 Capability token denied tool '%s'.", tool_name)
+                    if _constitution and _tool_handle:
+                        await _constitution.finish_tool_execution(
+                            _tool_handle,
+                            result={"ok": False, "error": "Capability token denied tool execution."},
+                            success=False,
+                            duration_ms=(time.time() - _start) * 1000,
+                            error="Capability token denied tool execution.",
+                        )
+                    return {"ok": False, "error": "Capability token denied tool execution."}
+                kwargs["capability_token_id"] = capability_token_id
+            except Exception as capability_err:
+                logger.warning("Capability verification failed for tool '%s': %s", tool_name, capability_err)
+                if _constitution and _tool_handle:
+                    await _constitution.finish_tool_execution(
+                        _tool_handle,
+                        result={"ok": False, "error": "Capability verification failed."},
+                        success=False,
+                        duration_ms=(time.time() - _start) * 1000,
+                        error="Capability verification failed.",
+                    )
+                return {"ok": False, "error": "Capability verification failed."}
+
         # 0. Virtual & Internal Tools
         if tool_name == "swarm_debate":
             if not self.swarm:

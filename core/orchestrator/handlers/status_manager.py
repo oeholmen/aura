@@ -4,6 +4,7 @@ import asyncio
 from typing import Any, Dict
 from core.config import config
 from core.container import ServiceContainer
+from core.runtime.organism_status import get_organism_status
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,11 @@ class StatusManagerMixin:
                     status_report["executive_authority"] = executive_authority.get_status()
             except Exception as exc:
                 logger.debug("Executive authority unavailable for status: %s", exc)
+
+            try:
+                status_report["organism"] = get_organism_status(self)
+            except Exception as exc:
+                logger.debug("Organism status unavailable for status report: %s", exc)
 
             return status_report
 

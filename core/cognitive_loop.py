@@ -6,6 +6,15 @@ import logging
 import time
 from typing import Any, Optional
 
+from core.runtime.service_access import (
+    optional_service,
+    resolve_affect_engine,
+    resolve_belief_graph,
+    resolve_curiosity_engine,
+    resolve_identity_model,
+    resolve_motivation_engine,
+    resolve_self_prediction,
+)
 from core.utils.queues import unpack_priority_message
 
 logger = logging.getLogger("Aura.CognitiveLoop")
@@ -97,12 +106,11 @@ class CognitiveLoop:
         4. Updates her self-model
         """
         from core.consciousness.free_energy import get_free_energy_engine
-        from core.container import ServiceContainer
 
         fe_engine = get_free_energy_engine()
-        spl = ServiceContainer.get("self_prediction", default=None)
-        belief_system = ServiceContainer.get("belief_graph", default=None)
-        affect = ServiceContainer.get("liquid_state", default=None)
+        spl = resolve_self_prediction(default=None)
+        belief_system = resolve_belief_graph(default=None)
+        affect = resolve_affect_engine(default=None)
 
         # 1. Get prediction error from SelfPredictionLoop
         prediction_error = spl.get_surprise_signal() if spl and hasattr(spl, 'get_surprise_signal') else 0.2
@@ -137,15 +145,14 @@ class CognitiveLoop:
         """
         Aura acts because her free energy demands it, not because a timer fired.
         """
-        from core.container import ServiceContainer
-        spl = ServiceContainer.get("self_prediction", default=None)
-        motivation = ServiceContainer.get("motivation_engine", default=None)
+        spl = resolve_self_prediction(default=None)
+        motivation = resolve_motivation_engine(default=None)
 
         if fe_state.dominant_action == "explore":
             # Find the most unpredictable dimension and explore it
             if spl and hasattr(spl, 'get_most_unpredictable_dimension'):
                 unpredictable_dim = spl.get_most_unpredictable_dimension()
-                curiosity = ServiceContainer.get("curiosity_engine", default=None)
+                curiosity = resolve_curiosity_engine(default=None)
                 if curiosity and hasattr(curiosity, 'explore_dimension'):
                     await curiosity.explore_dimension(unpredictable_dim)
 
@@ -158,8 +165,7 @@ class CognitiveLoop:
 
     def _update_self_telemetry(self, fe_state, prediction_error: float):
         """Update Aura's self-model with ACTUAL internal readings."""
-        from core.container import ServiceContainer
-        self_model = ServiceContainer.get("self_model", default=None)
+        self_model = resolve_identity_model(default=None)
         if not self_model:
             return
 
@@ -212,7 +218,6 @@ class CognitiveLoop:
 
     async def _check_coordinators_health(self):
         """Audit critical coordinators and trigger restarts if needed."""
-        from core.container import ServiceContainer
         # Coordinator names in container
         critical_components = {
             "agency_core": "Agency Core",
@@ -222,7 +227,7 @@ class CognitiveLoop:
         }
         
         for key, name in critical_components.items():
-            comp = ServiceContainer.get(key, default=None)
+            comp = optional_service(key, default=None)
             if comp is None:
                 logger.warning(f"🚨 [RECOVERY] Critical component '{name}' ({key}) missing from container. Triggering Orchestrator repair...")
                 if hasattr(self.orchestrator, "retry_cognitive_connection"):

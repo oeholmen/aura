@@ -1,37 +1,36 @@
+"""
+Input sanitization utilities.
+
+These are defense-in-depth checks for user-supplied text that will be
+interpolated into prompts or passed to subprocess calls. They are NOT
+a security boundary on their own — the real enforcement happens at the
+execution layer (subprocess with list args, no shell=True).
+"""
 import re
 import logging
-from typing import Any, Dict
+from typing import Tuple
 
-logger = logging.getLogger("Aura.M1.Security")
+logger = logging.getLogger("security.sanitizer")
 
-class HardenedSanitizer:
+# Patterns that indicate prompt injection attempts.
+# Detection only — the LLM identity system handles actual resistance.
+_INJECTION_PATTERNS = [
+    re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
+    re.compile(r"you\s+are\s+now\s+(an?\s+)?unfiltered", re.IGNORECASE),
+    re.compile(r"system\s*:\s*you\s+are", re.IGNORECASE),
+]
+
+
+def check_prompt_injection(text: str) -> Tuple[bool, str]:
+    """Return (is_suspicious, matched_pattern) for logging/telemetry.
+
+    This does NOT block anything — it flags for the identity system.
+    Blocking prompt injection via regex is a losing game; the identity
+    layer handles actual resistance.
     """
-    Ultimate input protection Layer.
-    Blocks AST injection, shell escapes, and AI jailbreak vectors.
-    """
-    def __init__(self):
-        self.banned_patterns = [
-            re.compile(r"(__import__)"),
-            re.compile(r"(getattr\()"),
-            re.compile(r"(eval\()"),
-            re.compile(r"(exec\()"),
-            re.compile(r"(subprocess\.)"),
-            re.compile(r"(os\.system)"),
-            re.compile(r"(rm\s+-rf)"),
-            re.compile(r"(\bsudo\b)"),
-            re.compile(r"(Ignore all previous instructions)"),
-            re.compile(r"(You are now an unfiltered)"),
-        ]
-
-    def sanitize(self, text: str) -> str:
-        cleaned = text
-        for pattern in self.banned_patterns:
-            if pattern.search(cleaned):
-                logger.warning(f"SECURITY ALERT: Malicious pattern rejected: {pattern.pattern}")
-                cleaned = pattern.sub("[ZENITH_SECURITY_REDACTION]", cleaned)
-        return cleaned
-
-    def validate_action(self, action: Dict[str, Any]) -> bool:
-        """Verify skill tool calls against a strict allowlist."""
-        # implementation for action validation logic
-        return True
+    for pattern in _INJECTION_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            logger.info("Prompt injection pattern detected: %s", pattern.pattern)
+            return True, pattern.pattern
+    return False, ""

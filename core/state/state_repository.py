@@ -590,13 +590,29 @@ class StateRepository:
         )
 
     def get_runtime_status(self) -> Dict[str, Any]:
-        consumer_alive = bool(self._consumer_task and not self._consumer_task.done())
+        local_consumer_alive = bool(self._consumer_task and not self._consumer_task.done())
+        shm_attached = bool(self._shm is not None)
+        state_available = self._current is not None
+        vault_transport_available = False
+        if not self.is_vault_owner:
+            try:
+                vault_transport_available = bool(self._transport_has_vault())
+            except Exception:
+                vault_transport_available = False
+
+        consumer_alive = local_consumer_alive
+        if not self.is_vault_owner:
+            # Proxy repositories do not own a local mutation consumer. They are healthy
+            # when they are hydrated and still attached to the vault/SHM path.
+            consumer_alive = bool(state_available and (shm_attached or vault_transport_available))
+
         return {
             "is_vault_owner": bool(self.is_vault_owner),
             "queue_depth": int(self._mutation_queue.qsize()),
             "queue_maxsize": int(self._mutation_queue_maxsize),
             "dropped_commit_count": int(self._dropped_commit_count),
             "consumer_alive": consumer_alive,
+            "local_consumer_alive": local_consumer_alive,
             "consumer_done": bool(self._consumer_task.done()) if self._consumer_task else False,
             "db_connected": self._db is not None,
             "current_version": int(getattr(self._current, "version", 0) or 0),
@@ -607,6 +623,9 @@ class StateRepository:
             "repair_count": int(self._repair_count),
             "last_shm_write_mode": str(self._last_shm_write_mode),
             "last_shm_overflow_bytes": int(self._last_shm_overflow_bytes),
+            "shm_attached": shm_attached,
+            "state_available": state_available,
+            "vault_transport_available": vault_transport_available,
         }
 
     async def repair_runtime(self) -> Dict[str, Any]:
@@ -624,6 +643,15 @@ class StateRepository:
             await self._ensure_db()
             self._repair_count += 1
             actions.append("reconnected_db")
+
+        if not self.is_vault_owner and self._current is None:
+            try:
+                await self._fetch_state_from_vault()
+            except Exception:
+                pass
+            if self._current is not None:
+                self._repair_count += 1
+                actions.append("rehydrated_proxy")
 
         queue_depth = self._mutation_queue.qsize()
         if queue_depth >= max(1, int(self._mutation_queue_maxsize * 0.75)):

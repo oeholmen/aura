@@ -3,8 +3,8 @@ import time
 from typing import Any, Optional
 from . import BasePhase
 from ..state.aura_state import AuraState
-from ..consciousness.executive_authority import get_executive_authority
 from core.runtime.background_policy import background_activity_allowed
+from core.runtime.proposal_governance import propose_governed_initiative_to_state
 
 logger = logging.getLogger(__name__)
 
@@ -133,10 +133,10 @@ class InitiativeGenerationPhase(BasePhase):
                  goal = "Hold attentive idle posture and wait for meaningful interaction."
 
             triggered_by = "boredom" if is_bored else "curiosity" if state.affect.curiosity > threshold else "social_hunger"
-            authority = get_executive_authority()
-            new_state, decision = await authority.propose_initiative_to_state(
+            new_state, decision = await propose_governed_initiative_to_state(
                 new_state,
                 goal,
+                orchestrator=None,
                 source="initiative_generation",
                 kind="autonomous_thought",
                 urgency=0.82 if is_bored else 0.78,

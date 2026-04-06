@@ -89,6 +89,8 @@ class StartupValidator:
     # ── Handlers ──────────────────────────────────────────────────────────────
 
     async def _check_safe_01(self, c: ValidationCheck):
+        from core.container import ServiceContainer
+
         dangerous = [
             "core/self_preservation_integration.py",
             "core/self_preservation_skills.py",
@@ -98,13 +100,37 @@ class StartupValidator:
         for path in dangerous:
             if Path(path).exists():
                 found.append(path)
-        
-        if found:
+
+        legacy_runtime_active = bool(
+            getattr(self.orchestrator, "self_preservation", None)
+            or ServiceContainer.get("self_preservation", default=None)
+        )
+        safe_backup_active = bool(
+            getattr(self.orchestrator, "backup_system", None)
+            or ServiceContainer.get("backup_system", default=None)
+        )
+
+        if legacy_runtime_active:
             c.passed = False
-            c.message = f"DANGER: {len(found)} ethics-bypass files still exist: {found}"
-        else:
+            c.message = (
+                "DANGER: legacy self-preservation runtime is active; "
+                "safe backup path is not authoritative."
+            )
+        elif safe_backup_active:
             c.passed = True
-            c.message = "Unsafe files purged."
+            if found:
+                c.message = (
+                    f"Safe backup path active; {len(found)} legacy self-preservation "
+                    "files remain on disk but are dormant."
+                )
+            else:
+                c.message = "Unsafe self-preservation path removed; safe backup active."
+        else:
+            c.passed = False
+            c.message = (
+                "Backup hardening missing; cannot confirm safe self-preservation "
+                "runtime path."
+            )
 
     async def _check_safe_02(self, c: ValidationCheck):
         from core.container import ServiceContainer

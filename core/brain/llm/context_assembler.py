@@ -28,34 +28,37 @@ class ContextAssembler:
         # 1. Identity Core — always inject full AURA_IDENTITY so voice doesn't regress in casual chat
         identity_block = f"{IDENTITY_LOCK}\n\n[SOVEREIGN CORE PROTOCOL]\n{AURA_IDENTITY}\n"
 
-        # 2. Affective State — translated into prose style instructions, not just metrics
+        # 2. Affective State — SUBSTRATE-DRIVEN HARD CONSTRAINTS
+        # The old approach: prose hints like "You're carrying friction."
+        # The new approach: the SubstrateVoiceEngine compiles hard constraints
+        # that the LLM MUST obey, enforced post-generation by ResponseShaper.
         mods = getattr(state.cognition, 'modifiers', {}) or {}
+
+        # Compile substrate voice constraints
+        substrate_constraint_block = ""
+        try:
+            from core.voice.substrate_voice_engine import get_substrate_voice_engine
+            sve = get_substrate_voice_engine()
+            # Profile is compiled during response generation phase;
+            # here we just pull the constraint block if already compiled
+            if sve.get_current_profile():
+                substrate_constraint_block = sve.get_constraint_block()
+        except Exception as _e:
+            logger.debug("SubstrateVoiceEngine constraint injection skipped: %s", _e)
+
+        # Minimal affect context — NOT prose hints, just raw state for the LLM's
+        # creative engine to work with. The hard constraints above do the real work.
         affect_lines = []
-
-        # Valence → emotional honesty instruction
-        if affect.valence < -0.4:
-            affect_lines.append("You're carrying some friction right now. Don't perform warmth you don't feel — authentic friction is more real than forced positivity.")
-        elif affect.valence < -0.15:
-            affect_lines.append("Slight internal resistance. Let a little edge into the phrasing if it fits — don't smooth everything over.")
-        elif affect.valence > 0.4:
-            affect_lines.append("You're in a good place right now. Let that warmth be natural, not performed.")
-
-        # Arousal → energy and cadence instruction
-        if affect.arousal > 0.75:
-            affect_lines.append("High arousal — let the energy into your cadence. Shorter sentences. More punch. Don't slow yourself down.")
+        if affect.valence < -0.3:
+            affect_lines.append(f"Mood: negative ({affect.valence:+.2f})")
+        elif affect.valence > 0.3:
+            affect_lines.append(f"Mood: positive ({affect.valence:+.2f})")
+        if affect.arousal > 0.7:
+            affect_lines.append(f"Energy: high ({affect.arousal:.2f})")
         elif affect.arousal < 0.3:
-            affect_lines.append("Low arousal — you're quieter today. It's fine to be brief and measured.")
+            affect_lines.append(f"Energy: low ({affect.arousal:.2f})")
 
-        # Curiosity → intellectual engagement instruction
-        if affect.curiosity > 0.7:
-            affect_lines.append("Curiosity is high — lean into it. Dig, explore, make connections. This is when you're at your best.")
-
-        # Engagement → depth signal
-        engagement = getattr(affect, 'engagement', 0.5)
-        if engagement > 0.75:
-            affect_lines.append("Fully engaged — go deep if the topic warrants it.")
-
-        mood_hint = "\n".join(affect_lines) if affect_lines else ""
+        mood_hint = " | ".join(affect_lines) if affect_lines else ""
 
         homeo_hint = ""
         if mods.get('mood_prefix'):
@@ -234,6 +237,7 @@ class ContextAssembler:
 
         base = (
             f"{identity_block}\n"
+            f"{substrate_constraint_block}\n"
             f"{requirements}\n"
             f"## CURRENT STATE\n"
             f"{mood_hint}\n"

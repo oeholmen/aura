@@ -71,6 +71,12 @@ class BaseSkill(ABC):
     _total_executions: int = 0
     _total_failures: int = 0
 
+    def _ensure_stats_initialized(self) -> None:
+        if "_total_executions" not in self.__dict__:
+            self._total_executions = 0
+        if "_total_failures" not in self.__dict__:
+            self._total_failures = 0
+
     @abstractmethod
     async def execute(self, params: Any, context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the skill's core logic.
@@ -110,6 +116,8 @@ class BaseSkill(ABC):
         """
         context = context or {}
         start = time.monotonic()
+        self._ensure_stats_initialized()
+        self._total_executions += 1
 
         # Input validation
         if self.input_model and isinstance(params, dict):
@@ -160,7 +168,6 @@ class BaseSkill(ABC):
 
         # Standardize the result
         duration_ms = (time.monotonic() - start) * 1000
-        self._total_executions += 1
 
         if not isinstance(result, dict):
             result = {"ok": True, "content": str(result)}
@@ -201,6 +208,7 @@ class BaseSkill(ABC):
 
     def get_stats(self) -> Dict[str, Any]:
         """Return execution statistics for this skill."""
+        self._ensure_stats_initialized()
         return {
             "name": self.name,
             "executions": self._total_executions,

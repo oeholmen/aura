@@ -150,13 +150,7 @@ class BeliefGraph:
         constitutional_runtime_live = False
         try:
             from core.container import ServiceContainer
-            from core.executive.executive_core import (
-                ActionType,
-                DecisionOutcome,
-                Intent,
-                IntentSource,
-                get_executive_core,
-            )
+            from core.constitution import get_constitutional_core
 
             constitutional_runtime_live = (
                 ServiceContainer.has("executive_core")
@@ -165,46 +159,40 @@ class BeliefGraph:
                 or bool(getattr(ServiceContainer, "_registration_locked", False))
             )
             if constitutional_runtime_live:
-                intent = Intent(
-                    source=IntentSource.SYSTEM,
-                    goal=f"belief_graph:{source}:{relation}",
-                    action_type=ActionType.UPDATE_BELIEF,
-                    payload={
-                        "source": source,
-                        "relation": relation,
-                        "target": target,
-                        "confidence": confidence_score,
-                        "centrality": centrality,
-                        "is_goal": is_goal,
-                    },
-                    priority=max(0.35, min(0.9, float(confidence_score or 0.0))),
-                    requires_memory_commit=True,
+                approved, reason = get_constitutional_core().approve_belief_update_sync(
+                    f"{source}:{relation}",
+                    target,
+                    note=f"confidence={confidence_score:.3f}; centrality={centrality:.3f}; is_goal={is_goal}",
+                    source="system",
+                    importance=max(0.35, min(0.9, float(confidence_score or 0.0))),
                 )
-                # Use sync approval but with a timeout to prevent event loop stalls
-                import concurrent.futures
-                _exec_core = get_executive_core()
-                try:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        future = pool.submit(_exec_core.request_approval_sync, intent)
-                        record = future.result(timeout=2.0)
-                except (concurrent.futures.TimeoutError, Exception) as _approval_err:
-                    logger.debug("Belief approval timed out or failed: %s — allowing update", _approval_err)
-                    from core.executive.executive_core import DecisionRecord, DecisionOutcome
-                    record = DecisionRecord(outcome=DecisionOutcome.DEGRADED, reason="approval_timeout")
-                if record.outcome not in (DecisionOutcome.APPROVED, DecisionOutcome.DEGRADED):
+                if not approved:
+                    event_reason = "belief_update_blocked"
+                    if any(
+                        marker in str(reason or "")
+                        for marker in ("gate_failed", "required", "unavailable")
+                    ):
+                        event_reason = "belief_update_gate_failed"
                     try:
                         from core.health.degraded_events import record_degraded_event
 
                         record_degraded_event(
                             "belief_graph",
-                            "belief_update_blocked",
+                            event_reason,
                             detail=f"{source}:{relation}->{target}",
                             severity="warning",
                             classification="background_degraded",
-                            context={"reason": record.reason},
+                            context={"reason": reason},
                         )
                     except Exception as degraded_exc:
                         logger.debug("BeliefGraph degraded-event logging failed: %s", degraded_exc)
+                    logger.info(
+                        "Belief update deferred by executive: %s -[%s]-> %s (%s)",
+                        source,
+                        relation,
+                        target,
+                        reason,
+                    )
                     return
 
             belief_authority = ServiceContainer.get("belief_authority", default=None)

@@ -2975,7 +2975,9 @@ if (clearBtn) clearBtn.addEventListener('click', () => {
 });
 
 // ── Onboarding ────────────────────────────────────────────
-if (!settings.onboarded) {
+// Keep the main chat camera-ready by only showing onboarding when explicitly requested.
+const onboardingRequested = new URLSearchParams(window.location.search).get('onboarding') === '1';
+if (!settings.onboarded && onboardingRequested) {
     const modal = document.getElementById('onboarding-modal');
     if (modal) {
         modal.style.display = 'flex';

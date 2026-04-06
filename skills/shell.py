@@ -1,4 +1,4 @@
-# skills/shell.py — PRODUCTION v5.1 (shell=True removed, destructive-pattern blocklist only)
+# skills/shell.py — Shell execution skill (subprocess with list args, no shell=True)
 import logging
 import os
 import shlex
@@ -40,20 +40,19 @@ class ShellSkill(BaseSkill):
     }
 
     def _is_safe_command(self, cmd_str: str) -> tuple:
-        """Validate command against whitelist, blocklist, and metacharacters. Returns (safe, reason)."""
-        # Check blocklist
+        """Validate command against blocklist and per-command restrictions.
+
+        Returns (safe, reason). Note: we use create_subprocess_exec with a
+        pre-split argument list (no shell=True), so shell metacharacters
+        are not a concern — they're treated as literal strings by the OS.
+        """
+        # Check destructive pattern blocklist
         cmd_lower = cmd_str.lower()
         for pattern in _BLOCKED_PATTERNS:
             if pattern in cmd_lower:
                 return False, f"Blocked dangerous pattern: {pattern}"
 
-        # Check shell metacharacters that indicate piping/chaining/redirection
-        dangerous_chars = {'|', '`', '$(', ';', '>', '<', '&', '\n', '\r', '\x00'}
-        for ch in dangerous_chars:
-            if ch in cmd_str:
-                return False, f"Shell metacharacter '{ch}' not allowed. Use separate commands."
-
-        # Extract base command
+        # Parse into tokens
         try:
             tokens = shlex.split(cmd_str)
         except ValueError:
@@ -63,9 +62,8 @@ class ShellSkill(BaseSkill):
             return False, "Empty command."
 
         base_cmd = os.path.basename(tokens[0])
-        # No command whitelist — any command is allowed.
 
-        # Apply per-command restrictions
+        # Per-command flag restrictions
         restrictions = self._RESTRICTED_COMMANDS.get(base_cmd)
         if restrictions:
             blocked_flags = restrictions.get("blocked_flags", set())
@@ -76,7 +74,7 @@ class ShellSkill(BaseSkill):
             if max_args and len(tokens) - 1 > max_args:
                 return False, f"Too many arguments for '{base_cmd}' (max {max_args})."
 
-        # rm must only operate on relative paths within workspace
+        # rm must only operate on paths within workspace
         if base_cmd == "rm":
             for arg in tokens[1:]:
                 if arg.startswith("-"):
@@ -86,15 +84,13 @@ class ShellSkill(BaseSkill):
                 if not resolved.startswith(allowed_root):
                     return False, f"rm blocked: '{arg}' resolves outside workspace."
 
-        # Subprocess Path Validation
-        # Warn if executing from suspicious locations
+        # Log if binary resolves to a suspicious location
         full_path = shutil.which(tokens[0])
         if full_path:
             suspicious_dirs = ["/tmp", "/var/tmp", "/dev/shm"]
             for s_dir in suspicious_dirs:
                 if full_path.startswith(s_dir):
-                    logger.warning("SUSPICIOUS EXECUTION: '%s' resolved to '%s'", cmd_str, full_path)
-                    # We don't block yet, but we log for the audit trail
+                    logger.warning("Suspicious binary location: '%s' -> '%s'", cmd_str, full_path)
                     break
 
         return True, "ok"

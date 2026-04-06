@@ -31,13 +31,13 @@ class AgencyBus:
     _instance: Optional['AgencyBus'] = None
 
     COOLDOWNS = {
-        'duty': 15,    # was 30
-        'drive': 30,   # was 60
-        'impulse': 45, # was 90
-        'boredom': 60, # was 120
+        'duty': 3,
+        'drive': 5,
+        'impulse': 8,
+        'boredom': 10,
     }
 
-    DEFAULT_COOLDOWN = 45 # was 90
+    DEFAULT_COOLDOWN = 8
 
     def __init__(self):
         self._last_output: float = 0.0

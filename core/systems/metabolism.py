@@ -15,6 +15,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+# Backward-compatibility shim for older imports that still expect the lightweight
+# metabolism state service from this module path.
+from core.services.metabolism import MetabolismService
+
 logger = logging.getLogger("Kernel.Metabolism")
 
 WASTE_EXTENSIONS = {".tmp", ".cache", ".pyc"}
@@ -121,6 +125,5 @@ class MetabolismEngine:
                 if entry.is_file():
                     total += entry.stat().st_size
         except Exception as exc:
-            logger.debug("Suppressed: %%s", exc)
-
-            return total
+            logger.debug("Suppressed: %s", exc)
+        return total

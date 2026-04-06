@@ -352,20 +352,7 @@ class MemoryFacade:
                 metadata={"success": bool(success), **dict(metadata or {})},
             )
             if not approved:
-                logger.warning("🚫 MemoryFacade interaction commit blocked: %s", reason)
-                try:
-                    from core.health.degraded_events import record_degraded_event
-
-                    record_degraded_event(
-                        "memory_facade",
-                        "interaction_commit_blocked",
-                        detail=reason,
-                        severity="warning",
-                        classification="background_degraded",
-                        context={"action": action[:80], "success": bool(success)},
-                    )
-                except Exception as exc:
-                    logger.debug("MemoryFacade degraded-event logging skipped: %s", exc)
+                logger.info("MemoryFacade: deferring interaction commit: %s", reason)
                 return None
         except Exception as exc:
             logger.debug("MemoryFacade constitutional gate skipped: %s", exc)

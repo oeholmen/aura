@@ -18,10 +18,10 @@ logger = logging.getLogger("Aura.Curiosity")
 def _background_exploration_allowed(orchestrator) -> bool:
     return background_activity_allowed(
         orchestrator,
-        min_idle_seconds=900.0,
+        min_idle_seconds=60.0,
         max_memory_percent=80.0,
         max_failure_pressure=0.12,
-        require_conversation_ready=True,
+        require_conversation_ready=False,
     )
 
 @dataclass
@@ -106,8 +106,8 @@ class CuriosityEngine:
                     await asyncio.sleep(60)
                     continue
                 
-                # Tiered intervals: L1: 180s, L2: 60s, L3: 30s
-                base_sleep = 180 if volition == 1 else (60 if volition == 2 else 30)
+                # Tiered intervals: L1: 60s, L2: 30s, L3: 15s
+                base_sleep = 60 if volition == 1 else (30 if volition == 2 else 15)
                 await asyncio.sleep(random.uniform(base_sleep * 0.8, base_sleep * 1.2))
                 
                 # Check if system is busy with user request
@@ -121,8 +121,8 @@ class CuriosityEngine:
 
                 # Check boredom
                 boredom = self.proactive_comm.get_boredom_level()
-                # Level 2+ lowers curiosity threshold
-                boredom_threshold = 0.7 if volition < 2 else 0.4
+                # Low threshold — let curiosity drive exploration
+                boredom_threshold = 0.15
                 
                 if boredom > boredom_threshold or self.curiosity_queue:
                     topic = self._get_next()

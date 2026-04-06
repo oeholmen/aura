@@ -386,19 +386,23 @@ class GUIChatWindow:
             def check_outgoing():
                 """Check for messages from Aura"""
                 try:
-                    while not self.outgoing_queue.empty():
+                    drained = 0
+                    while drained < 32:
                         aura_text = self.outgoing_queue.get_nowait()
+                        drained += 1
                         
                         chat_display.config(state=tk.NORMAL)
                         chat_display.insert(tk.END, f"AURA: {aura_text}\n\n")
                         chat_display.config(state=tk.DISABLED)
                         chat_display.see(tk.END)
                 except queue.Empty:
-                    logger.debug('Exception caught during execution: %s', e if 'e' in locals() or 'e' in globals() else 'unknown')
+                    pass
+                except Exception as e:
+                    logger.debug("GUI outgoing pump failed: %s", e, exc_info=True)
                 
                 # Schedule next check
                 if self.active:
-                    root.after(100, check_outgoing)
+                    root.after(25 if not self.outgoing_queue.empty() else 100, check_outgoing)
             
             # Start checking for messages
             root.after(100, check_outgoing)

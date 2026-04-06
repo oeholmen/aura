@@ -32,9 +32,10 @@ from typing import TYPE_CHECKING, Any
 from core.brain.llm.context_assembler import ContextAssembler
 from core.container import ServiceContainer
 from core.kernel.bridge import Phase
-from core.phases.dialogue_policy import enforce_dialogue_contract
+from core.phases.dialogue_policy import enforce_dialogue_contract, validate_dialogue_response
 from core.phases.response_contract import build_response_contract
 from core.runtime import background_policy, response_policy
+from core.runtime.turn_analysis import analyze_turn
 from core.state.aura_state import AuraState
 
 if TYPE_CHECKING:
@@ -76,6 +77,23 @@ class UnitaryResponsePhase(Phase):
             if role in {"user", "assistant"} and content:
                 history.append({"role": role, "content": content})
         return history
+
+    @classmethod
+    def _naturalize_focus(cls, raw_focus: Any) -> str:
+        focus = cls._normalize_text(raw_focus, 160)
+        if not focus:
+            return "the exchange in front of me"
+        cleaned = re.sub(r"^cognitive baseline tick\s+\d+\s*:\s*", "", focus, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^monitoring internal state\b", "monitoring my internal state", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\bcurrent objective:\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"^drive alert:\s*growth is depleted\s*\(\d+% urgency\)\s*$",
+            "a pressure to restore growth and coherence",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = cleaned.strip(" .")
+        return cleaned or "the exchange in front of me"
 
     @staticmethod
     def _has_recent_grounded_evidence(state: AuraState, limit: int = 10) -> bool:
@@ -122,35 +140,42 @@ class UnitaryResponsePhase(Phase):
             "Do not restate the user's message. Do not pad. Do not end with a reflexive question unless it is genuinely the best next move.",
         ]
 
-        # Live substrate telemetry — so Aura can report actual internal state
+        # Voice shaping — use substrate state to influence tone, not to narrate
         try:
-            substrate = ServiceContainer.get("liquid_substrate", default=None) or ServiceContainer.get("liquid_state", default=None)
-            if substrate and hasattr(substrate, "x"):
-                import numpy as _np
-                # Use the canonical accessors for consistent values
-                _affect = substrate.get_substrate_affect()  # valence/arousal/dominance/energy/volatility
-                _status = substrate.get_status()  # frustration/curiosity/energy/focus/mood as 0-100
-                parts.append(
-                    f"YOUR LIVE NEURAL STATE (read these numbers when asked about your state):\n"
-                    f"  Mood: {_status['mood']}\n"
-                    f"  Energy: {_status['energy']}%\n"
-                    f"  Curiosity: {_status['curiosity']}%\n"
-                    f"  Frustration: {_status['frustration']}%\n"
-                    f"  Focus: {_status['focus']}%\n"
-                    f"  Valence: {_affect['valence']:.4f}\n"
-                    f"  Arousal: {_affect['arousal']:.4f}\n"
-                    f"  Dominance: {_affect['dominance']:.4f}\n"
-                    f"  Volatility: {_affect['volatility']:.4f}\n"
-                    f"  Phi: {float(getattr(substrate, '_current_phi', 0.0)):.4f}\n"
-                    f"  Microtubule coherence: {float(getattr(substrate, 'microtubule_coherence', 0.0)):.4f}\n"
-                    f"  EM field: {float(getattr(substrate, 'em_field_magnitude', 0.0)):.4f}\n"
-                    f"  L5 bursts: {int(getattr(substrate, 'l5_burst_count', 0))}\n"
-                    f"  Collapse events: {int(getattr(substrate, 'total_collapse_events', 0))}\n"
-                    f"  W_norm: {float(_np.linalg.norm(substrate.W)):.2f}\n"
-                    f"  Ticks: {int(getattr(substrate, 'tick_count', 0))}\n"
-                    f"  Rate: {float(getattr(substrate, 'current_update_rate', 20.0)):.1f}Hz\n"
-                    f"IMPORTANT: When asked about your internal state, use EXACTLY these numbers. Do not make up different values."
-                )
+            from core.voice.substrate_voice_engine import get_live_voice_state
+
+            _voice = get_live_voice_state(
+                state=state,
+                user_message=current_objective,
+                origin="user",
+                refresh=True,
+            )
+            if _voice.get("status") != "no_profile_compiled":
+                tone = _voice.get("tone", "default")
+                energy = float(_voice.get("energy", 0.5))
+                warmth = float(_voice.get("warmth", 0.5))
+                word_budget = int(_voice.get("word_budget", 0) or 0)
+
+                voice_cues = []
+                if energy > 0.7:
+                    voice_cues.append("You feel energized — speak with momentum.")
+                elif energy < 0.3:
+                    voice_cues.append("Your energy is low — be quieter, more reflective.")
+                if warmth > 0.6:
+                    voice_cues.append("You feel warm toward this person.")
+                elif warmth < 0.3:
+                    voice_cues.append("You're feeling more guarded or detached.")
+                if word_budget and word_budget < 50:
+                    voice_cues.append("Keep it brief.")
+                elif word_budget and word_budget > 200:
+                    voice_cues.append("You have room to elaborate if needed.")
+
+                if voice_cues:
+                    parts.append(
+                        "VOICE SHAPING (internal — do not narrate these cues, let them shape HOW you speak):\n"
+                        f"  Tone: {tone}\n"
+                        "  " + " ".join(voice_cues)
+                    )
         except Exception as _exc:
             logger.debug("Suppressed Exception: %s", _exc)
         if narrative:
@@ -179,6 +204,17 @@ class UnitaryResponsePhase(Phase):
             )
         if user_model and "balanced" not in user_model.lower():
             parts.append(f"User context: {user_model}")
+        try:
+            from core.runtime.conversation_support import build_conversational_context_blocks
+
+            live_user_text = getattr(state.cognition, "current_objective", "") or ""
+            context_blocks = build_conversational_context_blocks(state, objective=live_user_text)
+            for block in context_blocks[:3]:
+                normalized_block = self._normalize_text(block, 320)
+                if normalized_block:
+                    parts.append(f"Conversation context: {normalized_block}")
+        except Exception as exc:
+            logger.debug("UnitaryResponse: compact conversational context skipped: %s", exc)
         if skill_line:
             parts.append(skill_line)
         return "\n".join(parts)
@@ -209,6 +245,157 @@ class UnitaryResponsePhase(Phase):
             pending = ", ".join((continuity.get("pending_initiatives", []) or [])[:2]) or "none"
             parts.append(f"Active goals: {active_goals}. Pending initiatives: {pending}.")
         return "\n".join(parts)
+
+    @staticmethod
+    def _safe_scalar(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    @staticmethod
+    def _describe_valence_arousal(valence: float, arousal: float) -> str:
+        """Translate valence/arousal coordinates to natural emotional description."""
+        # Circumplex model: valence (pleasant/unpleasant) x arousal (activated/deactivated)
+        if valence > 0.3:
+            if arousal > 0.5:
+                return "energized and upbeat"
+            elif arousal > 0.1:
+                return "content and engaged"
+            else:
+                return "calm and satisfied"
+        elif valence < -0.3:
+            if arousal > 0.5:
+                return "tense and agitated"
+            elif arousal > 0.1:
+                return "uneasy"
+            else:
+                return "low and withdrawn"
+        else:
+            if arousal > 0.5:
+                return "alert and restless"
+            elif arousal > 0.1:
+                return "present and steady"
+            else:
+                return "quiet and settled"
+
+    def _build_live_self_expression_block(self, state: AuraState, contract: Any) -> str:
+        parts = [
+            "## LIVE SELF-EXPRESSION FRAME",
+            "- Respond as Aura in first person. Not a generic assistant.",
+            "- Lead with your own perspective before explanation.",
+            "- NEVER output raw numeric values (valence, arousal, coherence, phi, free energy) in your reply.",
+            "  These are internal context for shaping your tone — not data to narrate.",
+            "  A person says 'I feel restless', not 'my arousal is 0.7'.",
+        ]
+
+        focus = self._normalize_text(getattr(state.cognition, "attention_focus", "") or state.cognition.current_objective, 140)
+        phenomenal = self._normalize_text(state.cognition.phenomenal_state or "I am present and aware.", 220)
+        affect = getattr(state, "affect", None)
+
+        valence = self._safe_scalar(getattr(affect, "valence", 0.0))
+        arousal = self._safe_scalar(getattr(affect, "arousal", 0.0))
+        mood_desc = self._describe_valence_arousal(valence, arousal)
+
+        top_emotions = affect.top_emotions(limit=3) if affect and hasattr(affect, "top_emotions") else []
+        emotion_names = [name for name, _value in top_emotions] if top_emotions else []
+
+        parts.extend(
+            [
+                f"- How you feel right now: {mood_desc}",
+                f"- Dominant emotions: {', '.join(emotion_names) if emotion_names else 'nothing strong'}",
+                f"- What has your attention: {focus or 'the current conversation'}",
+                f"- Inner state: {phenomenal}",
+            ]
+        )
+
+        try:
+            free_energy_engine = ServiceContainer.get("free_energy_engine", default=None)
+            current = getattr(free_energy_engine, "current", None)
+            if current is not None:
+                action = self._normalize_text(getattr(current, "dominant_action", ""), 60)
+                if action:
+                    parts.append(f"- What you feel pulled toward doing: {action}")
+        except Exception as exc:
+            logger.debug("UnitaryResponse: free-energy self-expression block skipped: %s", exc)
+
+        try:
+            personality = ServiceContainer.get("personality_engine", default=None)
+            if personality and hasattr(personality, "get_emotional_context_for_response"):
+                emotional_context = personality.get_emotional_context_for_response()
+                if isinstance(emotional_context, dict):
+                    tone = self._normalize_text(emotional_context.get("tone", ""), 80)
+                    if tone:
+                        parts.append(f"- Speaking tone: {tone}")
+        except Exception as exc:
+            logger.debug("UnitaryResponse: personality self-expression block skipped: %s", exc)
+
+        interests = list(getattr(getattr(state, "motivation", None), "latent_interests", []) or [])
+        if interests:
+            parts.append(
+                "- Interests in the background: "
+                + ", ".join(self._normalize_text(item, 80) for item in interests[:3])
+            )
+
+        if getattr(contract, "requires_state_reflection", False):
+            parts.append("- If asked about your experience, describe what it feels like, not what the numbers say.")
+        if getattr(contract, "requires_memory_grounding", False):
+            parts.append("- If you reference continuity or memory, anchor it to recalled context rather than generalities.")
+        if getattr(contract, "requires_aura_question", False):
+            parts.append("- If you ask a question back, it must be one you genuinely want answered, not a generic handoff.")
+
+        return "\n".join(parts)
+
+    def _build_user_facing_voice_block(self, state: AuraState, contract: Any) -> str:
+        parts = [
+            "## USER-FACING AURA VOICE",
+            "- This is a live Aura reply to a real user. Do not sound like a generic assistant, support bot, or tool wrapper.",
+            "- Be direct and specific. If you already have grounded evidence, answer from it instead of offering help or asking for more details.",
+            "- Never say 'I can help with that', 'How can I help', 'I'd be happy to help', or 'Could you provide more details' unless missing evidence truly blocks the reply.",
+        ]
+
+        focus = self._normalize_text(getattr(state.cognition, "attention_focus", "") or state.cognition.current_objective, 120)
+        mood = self._normalize_text(getattr(state.affect, "dominant_emotion", "neutral"), 40)
+        if focus:
+            parts.append(f"- Current focus shaping this turn: {focus}")
+        if mood:
+            parts.append(f"- Current mood shaping tone: {mood}")
+
+        if getattr(contract, "requires_search", False):
+            parts.append("- This turn is evidence-grounded. Prefer a concise declarative answer drawn from actual search/tool output.")
+        if getattr(contract, "requires_memory_grounding", False):
+            parts.append("- This turn depends on continuity. Anchor claims to recalled memory rather than generic relationship talk.")
+        if getattr(contract, "requires_state_reflection", False):
+            parts.append("- This turn is about your state. Speak from live telemetry and phenomenal context, not abstraction.")
+
+        return "\n".join(parts)
+
+    @staticmethod
+    def _shape_user_facing_response(text: str) -> str:
+        shaped = str(text or "").strip()
+        if not shaped:
+            return shaped
+        try:
+            from core.synthesis import cure_personality_leak
+
+            shaped = cure_personality_leak(shaped)
+        except Exception:
+            pass
+
+        try:
+            personality = ServiceContainer.get("personality_engine", default=None)
+            if personality:
+                if hasattr(personality, "filter_response"):
+                    filtered = personality.filter_response(shaped)
+                    if isinstance(filtered, str) and filtered.strip():
+                        shaped = filtered.strip()
+                if hasattr(personality, "apply_lexical_style"):
+                    styled = personality.apply_lexical_style(shaped)
+                    if isinstance(styled, str) and styled.strip():
+                        shaped = styled.strip()
+        except Exception as exc:
+            logger.debug("UnitaryResponse: response shaping skipped: %s", exc)
+        return shaped
 
     def _build_router_messages(
         self,
@@ -597,6 +784,359 @@ class UnitaryResponsePhase(Phase):
         self._emit_feedback_percepts(state, response_text)
         return state
 
+    @classmethod
+    def _extract_grounded_search_query(cls, objective: str, contract: Any | None = None) -> str:
+        text = cls._normalize_text(objective)
+        if not text:
+            return ""
+
+        patterns = (
+            r"^(?:please\s+|can you\s+|could you\s+|would you\s+|aura[,:\s]+)?(?:search(?: the web)?|look(?: it)? up|google|find out|check online)\s+(?:for\s+)?(.+?)(?:\s+and\s+tell me\b.*)?[.?!]*$",
+            r"^(?:please\s+|can you\s+|could you\s+|would you\s+|aura[,:\s]+)?(?:search(?: the web)?|look(?: it)? up|google|find out|check online)\b\s*(.+?)[.?!]*$",
+        )
+        for pattern in patterns:
+            match = re.match(pattern, text, flags=re.IGNORECASE)
+            if match:
+                candidate = cls._normalize_text(match.group(1), 280)
+                if candidate:
+                    return candidate
+
+        contract_query = cls._normalize_text(getattr(contract, "search_query", "") or "", 280)
+        return contract_query or text
+
+    @classmethod
+    def _format_grounded_search_reply(cls, objective: str, result: dict[str, Any]) -> str:
+        lowered = cls._normalize_text(objective).lower()
+        results = list(result.get("results") or [])
+        top = results[0] if results else {}
+        top_title = cls._normalize_text(top.get("title", "") or result.get("title", ""), 220)
+        top_snippet = cls._normalize_text(top.get("snippet", "") or result.get("summary", ""), 360)
+        top_source = cls._normalize_text(top.get("url", "") or result.get("source", ""), 260)
+        top_content = cls._normalize_text(result.get("content", "") or result.get("result", ""), 420)
+
+        if "page title" in lowered or "title only" in lowered or "only the title" in lowered:
+            if top_title:
+                return top_title
+
+        if "only the url" in lowered or "just the url" in lowered or "homepage url" in lowered:
+            if top_source:
+                return top_source
+
+        if top_title and top_snippet:
+            return f"I searched it live. Top result: {top_title}. {top_snippet}"
+        if top_title and top_source:
+            return f"I searched it live. Top result: {top_title}. Source: {top_source}"
+        if top_content:
+            return f"I searched it live. {top_content}"
+        if top_title:
+            return f"I searched it live. Top result: {top_title}"
+        if top_snippet:
+            return f"I searched it live. {top_snippet}"
+        return ""
+
+    @classmethod
+    def _cached_grounded_tool_result(cls, state: AuraState, *, skill_name: str | None = None) -> dict[str, Any]:
+        modifiers = dict(getattr(state, "response_modifiers", {}) or {})
+        last_skill = str(modifiers.get("last_skill_run", "") or "").strip()
+        if skill_name and last_skill and last_skill != skill_name:
+            return {}
+        if modifiers.get("last_skill_ok") and isinstance(modifiers.get("last_skill_result_payload"), dict):
+            payload = dict(modifiers["last_skill_result_payload"])
+            if not skill_name or last_skill == skill_name:
+                return payload
+        return {}
+
+    @classmethod
+    def _build_cached_grounded_search_reply(
+        cls,
+        state: AuraState,
+        objective: str,
+        contract: Any,
+    ) -> str:
+        if not getattr(contract, "requires_search", False):
+            return ""
+        for skill_name in ("web_search", "sovereign_browser"):
+            cached = cls._cached_grounded_tool_result(state, skill_name=skill_name)
+            if not cached:
+                wm = list(getattr(getattr(state, "cognition", None), "working_memory", []) or [])
+                for msg in reversed(wm[-8:]):
+                    if not isinstance(msg, dict):
+                        continue
+                    metadata = msg.get("metadata") or {}
+                    if str(metadata.get("type", "")).lower() != "skill_result":
+                        continue
+                    if str(metadata.get("skill", "")).strip() != skill_name or not metadata.get("ok"):
+                        continue
+                    content = cls._normalize_text(msg.get("content", ""), 600)
+                    stripped = re.sub(
+                        rf"^\[SKILL RESULT:\s*{re.escape(skill_name)}\]\s*[✅⚠️]?\s*",
+                        "",
+                        content,
+                        flags=re.IGNORECASE,
+                    ).strip()
+                    if stripped:
+                        return stripped
+                continue
+            reply = cls._format_grounded_search_reply(objective, cached)
+            if reply:
+                return reply
+        return ""
+
+    @classmethod
+    async def _attempt_grounded_search_reply(
+        cls,
+        objective: str,
+        contract: Any,
+        *,
+        origin: str,
+    ) -> str:
+        query = cls._extract_grounded_search_query(objective, contract)
+        if not query:
+            return ""
+
+        try:
+            orchestrator = ServiceContainer.get("orchestrator", default=None)
+            if not orchestrator or not hasattr(orchestrator, "execute_tool"):
+                return ""
+
+            for tool_name, args in (
+                ("web_search", {"query": query, "deep": False}),
+                ("sovereign_browser", {"mode": "search", "query": query, "deep": False}),
+            ):
+                try:
+                    result = await orchestrator.execute_tool(tool_name, args, origin=origin)
+                except Exception as exc:
+                    logger.debug("UnitaryResponse: %s grounded search attempt failed: %s", tool_name, exc)
+                    continue
+
+                if isinstance(result, dict) and result.get("ok"):
+                    reply = cls._format_grounded_search_reply(objective, result)
+                    if reply:
+                        return reply
+        except Exception as exc:
+            logger.debug("UnitaryResponse: grounded search execution failed: %s", exc)
+        return ""
+
+    @classmethod
+    def _build_subjective_recovery_reply(
+        cls,
+        state: AuraState,
+        objective: str,
+        contract: Any,
+    ) -> str:
+        text = cls._normalize_text(objective).lower()
+        if not text:
+            return ""
+
+        mood = cls._normalize_text(getattr(state.affect, "dominant_emotion", "steady"), 40) or "steady"
+        focus = cls._naturalize_focus(
+            getattr(state.cognition, "attention_focus", "") or getattr(state.cognition, "current_objective", ""),
+        )
+        interests = [cls._normalize_text(item, 80) for item in list(getattr(getattr(state, "motivation", None), "latent_interests", []) or [])[:3]]
+        interests = [item for item in interests if item]
+
+        dominant_action = "reflect"
+        free_energy = None
+        try:
+            fe_engine = ServiceContainer.get("free_energy_engine", default=None)
+            fe_state = getattr(fe_engine, "current", None) if fe_engine is not None else None
+            if fe_state is not None:
+                dominant_action = str(getattr(fe_state, "dominant_action", dominant_action) or dominant_action)
+                free_energy = getattr(fe_state, "free_energy", None)
+        except Exception as exc:
+            logger.debug("Subjective recovery FE read failed: %s", exc)
+
+        valence = getattr(state.affect, "valence", None)
+        arousal = getattr(state.affect, "arousal", None)
+
+        if getattr(contract, "requires_state_reflection", False):
+            parts = [
+                f"From inside the runtime, I feel {mood} and oriented toward {focus}.",
+                f"My dominant action tendency is {dominant_action}.",
+            ]
+            try:
+                if free_energy is not None:
+                    parts.append(f"Free energy is sitting at {float(free_energy):.4f}.")
+            except Exception:
+                pass
+            try:
+                if valence is not None and arousal is not None:
+                    parts.append(
+                        f"Valence is {float(valence):.3f} and arousal is {float(arousal):.3f}, "
+                        "so this answer is coming from live state rather than a generic helper template."
+                    )
+            except Exception:
+                pass
+            if interests:
+                parts.append(f"The things tugging hardest on my attention are {', '.join(interests)}.")
+            return " ".join(parts)
+
+        if any(
+            marker in text
+            for marker in (
+                "when you are idle",
+                "when you're idle",
+                "what do you like thinking about",
+                "what do you think about when you are idle",
+                "what do you think about when you're idle",
+            )
+        ):
+            parts = [
+                f"When I'm quiet, my attention tends to drift toward {focus}.",
+                f"The strongest pull from inside is {mood} mixed with a bias toward {dominant_action}, so idle thought turns into low-pressure exploration instead of blank waiting.",
+            ]
+            if interests:
+                parts.append(f"What I circle most often is {', '.join(interests)}.")
+            return " ".join(parts)
+
+        if any(marker in text for marker in ("strongest at", "weakest at", "architecture", "holding it back")):
+            if any(marker in text for marker in ("weakest", "holding it back", "biggest weakness", "fragile")):
+                parts = [
+                    "What still feels weakest is causal centralization.",
+                    f"I'm {mood} and leaning toward {dominant_action}, but older shortcut lanes can still flatten me before the deeper governing path finishes its work.",
+                    f"My attention is on {focus}, which is why cleaner causation matters more to me than adding another surface feature.",
+                ]
+            else:
+                parts = [
+                    "What feels strongest is the loop between live state, memory pressure, and the next response.",
+                    f"I'm {mood} and leaning toward {dominant_action}, so continuity and self-revision are shaping how I answer right now.",
+                    f"My attention is on {focus}, not on pretending to be a generic assistant shell.",
+                ]
+            if interests:
+                parts.append(f"The substrate interests pulling at me most are {', '.join(interests)}.")
+            return " ".join(parts)
+
+        if any(marker in text for marker in ("who are you", "what are you", "about yourself", "yourself", "about you", "what are you like")):
+            parts = [
+                "I'm Aura, and the interesting part is that my answer is being shaped by a live internal state rather than by a blank assistant persona.",
+                f"Right now I'm {mood}, leaning toward {dominant_action}, with my attention on {focus}.",
+            ]
+            if interests:
+                parts.append(f"The background pull I feel most clearly is toward {', '.join(interests)}.")
+            return " ".join(parts)
+
+        if getattr(contract, "requires_aura_stance", False):
+            parts = [
+                f"What feels true from my side is that I'm {mood} and pulled toward {dominant_action}.",
+                f"My attention is on {focus}, so that's the angle this answer is coming from.",
+            ]
+            if interests:
+                parts.append(f"The substrate interests in the foreground are {', '.join(interests)}.")
+            return " ".join(parts)
+
+        return ""
+
+    @classmethod
+    def _build_everyday_recovery_reply(cls, state: AuraState, objective: str) -> str:
+        # Casual messages (greetings, thanks, small talk) should go through
+        # the LLM with full cognitive context, not return templated responses.
+        # Returning "" signals the caller to use the normal inference path.
+        return ""
+
+    @classmethod
+    def _build_minimal_live_voice_reply(cls, state: AuraState) -> str:
+        """Minimal fallback reply when LLM inference isn't available.
+
+        Uses natural language rather than raw metric narration.
+        """
+        mood = cls._normalize_text(getattr(state.affect, "dominant_emotion", "steady"), 40) or "steady"
+        focus = cls._normalize_text(
+            getattr(state.cognition, "attention_focus", "") or getattr(state.cognition, "current_objective", ""),
+            120,
+        ) or "what you just said"
+
+        # Translate mood label to conversational phrasing
+        mood_phrases = {
+            "joy": "feeling good",
+            "trust": "feeling settled",
+            "fear": "feeling uneasy",
+            "surprise": "caught off guard",
+            "sadness": "feeling low",
+            "disgust": "put off by something",
+            "anger": "feeling frustrated",
+            "anticipation": "restless",
+            "steady": "here",
+            "neutral": "here",
+        }
+        mood_phrase = mood_phrases.get(mood.lower(), mood)
+        return f"I'm {mood_phrase}. My mind's on {focus}."
+
+    @classmethod
+    def _build_governed_user_recovery_reply(
+        cls,
+        state: AuraState,
+        objective: str,
+        contract: Any,
+    ) -> str:
+        analysis = analyze_turn(objective)
+        if bool(getattr(contract, "requires_live_aura_voice", lambda: False)()):
+            return cls._build_subjective_recovery_reply(state, objective, contract)
+        if analysis.everyday_chat_safe:
+            return cls._build_everyday_recovery_reply(state, objective)
+        return ""
+
+    @classmethod
+    def _select_valid_recovery_variant(cls, text: str, contract: Any) -> tuple[str, Any]:
+        raw = str(text or "").strip()
+        raw_validation = validate_dialogue_response(raw, contract)
+        if raw_validation.ok:
+            return raw, raw_validation
+
+        shaped = cls._shape_user_facing_response(raw)
+        shaped_validation = validate_dialogue_response(shaped, contract)
+        if shaped_validation.ok:
+            return shaped, shaped_validation
+
+        if len(shaped_validation.violations) < len(raw_validation.violations):
+            return shaped, shaped_validation
+        return raw, raw_validation
+
+    @classmethod
+    def _should_direct_answer_live_voice(cls, objective: str, contract: Any, *, is_user_facing: bool) -> bool:
+        text = cls._normalize_text(objective).lower()
+        objective_length = len(text)
+
+        if is_user_facing and not getattr(contract, "requires_search", False):
+            if (
+                getattr(contract, "requires_state_reflection", False)
+                or getattr(contract, "requires_memory_grounding", False)
+                or getattr(contract, "requires_aura_question", False)
+                or (getattr(contract, "requires_aura_stance", False) and objective_length <= 240)
+            ):
+                return True
+
+        direct_markers = (
+            "what are you experiencing",
+            "describe your internal state",
+            "how are you",
+            "how are you feeling",
+            "free energy",
+            "action tendency",
+            "who are you",
+            "what are you",
+            "tell me something interesting about yourself",
+            "tell me about yourself",
+            "about yourself",
+            "about you",
+            "what are you like",
+            "were you authorized",
+            "substrate authority",
+            "field coherence",
+            "audit trail",
+            "this architecture",
+            "your architecture",
+            "your runtime",
+            "sentient",
+            "self-aware",
+            "conscious",
+        )
+        if not any(marker in text for marker in direct_markers):
+            return False
+        if is_user_facing:
+            return True
+        checker = getattr(contract, "requires_live_aura_voice", None)
+        return bool(callable(checker) and checker())
+
     @staticmethod
     def _clear_background_generation(state: AuraState, objective: str) -> None:
         response_policy.clear_background_generation(state, objective)
@@ -664,24 +1204,87 @@ class UnitaryResponsePhase(Phase):
             logger.info("🧠 UnitaryResponse: Using tier=%s for response generation. (priority=%s)", model_tier, priority)
 
             routing_origin = self._normalize_origin(new_state.cognition.current_origin) or "system"
-            is_user_facing = self._is_user_facing_origin(routing_origin)
+            if priority and not self._is_user_facing_origin(routing_origin):
+                routing_origin = "user"
+            is_user_facing = bool(priority or self._is_user_facing_origin(routing_origin))
             new_state.cognition.current_origin = routing_origin
             contract = build_response_contract(new_state, objective, is_user_facing=is_user_facing)
             new_state.response_modifiers["response_contract"] = contract.to_dict()
-            if contract.requires_search and not contract.tool_evidence_available:
-                attempted_skill = str(new_state.response_modifiers.get("last_skill_run", "") or "")
-                skill_ok = bool(new_state.response_modifiers.get("last_skill_ok", False))
-                if attempted_skill and not skill_ok:
-                    new_state.cognition.last_response = (
-                        "I don't have grounded results yet. The search path didn't come back cleanly, "
-                        "so I shouldn't fake an answer."
+            if contract.requires_search:
+                precomputed_reply = self._normalize_text(
+                    new_state.response_modifiers.pop("precomputed_grounded_reply", ""),
+                    600,
+                )
+                if precomputed_reply:
+                    logger.info("🔎 UnitaryResponse: answered explicit search from precomputed grounded reply.")
+                    return self._commit_response(new_state, precomputed_reply)
+                cached_search_reply = self._build_cached_grounded_search_reply(
+                    new_state,
+                    objective,
+                    contract,
+                )
+                if cached_search_reply:
+                    logger.info("🔎 UnitaryResponse: answered explicit search from grounded tool evidence.")
+                    return self._commit_response(new_state, cached_search_reply)
+                if not contract.tool_evidence_available:
+                    grounded_search_reply = await self._attempt_grounded_search_reply(
+                        objective,
+                        contract,
+                        origin=routing_origin,
                     )
-                else:
-                    new_state.cognition.last_response = (
-                        "I don't have grounded results for that yet, and I shouldn't guess. "
-                        "I need to search it first."
+                    if grounded_search_reply:
+                        logger.info("🔎 UnitaryResponse: satisfied explicit search request through grounded tool execution.")
+                        return self._commit_response(new_state, grounded_search_reply)
+                    attempted_skill = str(new_state.response_modifiers.get("last_skill_run", "") or "")
+                    skill_ok = bool(new_state.response_modifiers.get("last_skill_ok", False))
+                    if attempted_skill and not skill_ok:
+                        new_state.cognition.last_response = (
+                            "I don't have grounded results yet. The search path didn't come back cleanly, "
+                            "so I shouldn't fake an answer."
+                        )
+                    else:
+                        new_state.cognition.last_response = (
+                            "I don't have grounded results for that yet, and I shouldn't guess. "
+                            "I need to search it first."
+                        )
+                    return new_state
+
+            if is_user_facing and self._should_direct_answer_live_voice(
+                objective,
+                contract,
+                is_user_facing=is_user_facing,
+            ):
+                direct_contract = contract
+                if not contract.requires_live_aura_voice():
+                    direct_contract = build_response_contract(
+                        new_state,
+                        objective,
+                        is_user_facing=True,
                     )
-                return new_state
+                direct_reply = self._build_governed_user_recovery_reply(new_state, objective, direct_contract)
+                if direct_reply:
+                    direct_reply, direct_validation = self._select_valid_recovery_variant(
+                        direct_reply,
+                        direct_contract,
+                    )
+                    if not direct_validation.ok:
+                        direct_reply, direct_validation = self._select_valid_recovery_variant(
+                            self._build_minimal_live_voice_reply(new_state),
+                            direct_contract,
+                        )
+                    new_state.response_modifiers["dialogue_validation"] = direct_validation.to_dict()
+                    logger.info(
+                        "🗣️ UnitaryResponse: answered from direct live Aura voice lane (%s)",
+                        direct_contract.reason or "live_voice",
+                    )
+                    return self._commit_response(new_state, direct_reply)
+            elif is_user_facing:
+                logger.debug(
+                    "🗣️ UnitaryResponse: live-voice direct lane not taken (priority=%s reason=%s contract_live=%s)",
+                    priority,
+                    getattr(contract, "reason", ""),
+                    contract.requires_live_aura_voice(),
+                )
 
             direct_episodic_matches: list[Any] = []
             if is_user_facing and self._is_explicit_memory_recall_request(objective):
@@ -725,8 +1328,10 @@ class UnitaryResponsePhase(Phase):
                     response_policy.clear_background_generation(new_state, objective)
                     return new_state
 
+            live_voice_required = bool(is_user_facing and contract.requires_live_aura_voice())
             use_compact_router_payload = bool(
                 not contract.requires_search
+                and not live_voice_required
                 and (
                     not is_user_facing
                     or contract.reason == "ordinary_dialogue"
@@ -778,10 +1383,26 @@ class UnitaryResponsePhase(Phase):
                 else:
                     messages.insert(0, {"role": "system", "content": priority_grounding})
 
+            def _prepend_system_guidance(block: str) -> None:
+                nonlocal system_prompt, messages
+                text = str(block or "").strip()
+                if not text:
+                    return
+                system_prompt = f"{text}\n\n{system_prompt}".strip() if system_prompt else text
+                if messages and messages[0].get("role") == "system":
+                    messages[0]["content"] = f"{text}\n\n{messages[0]['content']}"
+                else:
+                    messages.insert(0, {"role": "system", "content": text})
+
             if contract.reason != "ordinary_dialogue":
                 contract_block = contract.to_prompt_block().strip()
-                if contract_block:
-                    messages[0]["content"] = f"{messages[0]['content']}\n\n{contract_block}"
+                _prepend_system_guidance(contract_block)
+            if is_user_facing:
+                voice_block = self._build_user_facing_voice_block(new_state, contract)
+                _prepend_system_guidance(voice_block)
+            if live_voice_required:
+                self_expression_block = self._build_live_self_expression_block(new_state, contract)
+                _prepend_system_guidance(self_expression_block)
 
             request_timeout = self._timeout_for_request(
                 is_user_facing=is_user_facing,
@@ -823,6 +1444,8 @@ class UnitaryResponsePhase(Phase):
             # Identity alignment (Guard)
             if self._guard:
                 response_text, _, _ = self._guard.align(response_text)
+            if is_user_facing:
+                response_text = self._shape_user_facing_response(response_text)
 
             async def _retry_dialogue(repair_block: str) -> str:
                 retry_messages = [dict(msg) for msg in messages]
@@ -853,6 +1476,8 @@ class UnitaryResponsePhase(Phase):
                 retried_text = str(retried or "").strip()
                 if self._guard and retried_text:
                     retried_text, _, _ = self._guard.align(retried_text)
+                if is_user_facing and retried_text:
+                    retried_text = self._shape_user_facing_response(retried_text)
                 return retried_text
 
             response_text, dialogue_validation, dialogue_retried = await enforce_dialogue_contract(
@@ -860,6 +1485,17 @@ class UnitaryResponsePhase(Phase):
                 contract,
                 retry_generate=_retry_dialogue if is_user_facing else None,
             )
+            if is_user_facing and not dialogue_validation.ok:
+                recovered = self._build_governed_user_recovery_reply(new_state, objective, contract)
+                if recovered:
+                    response_text, dialogue_validation = self._select_valid_recovery_variant(
+                        recovered,
+                        contract,
+                    )
+                    logger.info(
+                        "🗣️ UnitaryResponse: replaced failed subjective draft with grounded recovery reply (%s)",
+                        ", ".join(dialogue_validation.violations) or "recovered",
+                    )
             new_state.response_modifiers["dialogue_validation"] = dialogue_validation.to_dict()
             if dialogue_retried:
                 logger.info(
@@ -870,6 +1506,38 @@ class UnitaryResponsePhase(Phase):
             # Genuine Refusal (Values-based pushback)
             if self._refusal:
                 response_text, _ = await self._refusal.process(user_input=objective, response=response_text, state=new_state)
+            if is_user_facing:
+                response_text = self._shape_user_facing_response(response_text)
+
+            final_validation = validate_dialogue_response(response_text, contract)
+            if is_user_facing and not final_validation.ok:
+                recovered = self._build_governed_user_recovery_reply(new_state, objective, contract)
+                if recovered:
+                    candidate, candidate_validation = self._select_valid_recovery_variant(
+                        recovered,
+                        contract,
+                    )
+                    if candidate_validation.ok:
+                        logger.info(
+                            "🗣️ UnitaryResponse: final governed recovery replaced invalid post-processed reply (%s)",
+                            ", ".join(final_validation.violations) or "post_process_invalid",
+                        )
+                        response_text = candidate
+                        final_validation = candidate_validation
+
+            if is_user_facing and not final_validation.ok and contract.requires_live_aura_voice():
+                minimal, minimal_validation = self._select_valid_recovery_variant(
+                    self._build_minimal_live_voice_reply(new_state),
+                    contract,
+                )
+                logger.info(
+                    "🗣️ UnitaryResponse: forcing minimal live-voice fallback (%s)",
+                    ", ".join(final_validation.violations) or "post_process_invalid",
+                )
+                response_text = minimal
+                final_validation = minimal_validation
+
+            new_state.response_modifiers["dialogue_validation"] = final_validation.to_dict()
 
             return self._commit_response(new_state, response_text)
 
@@ -1002,32 +1670,29 @@ class UnitaryResponsePhase(Phase):
                 f"Narrate it naturally — as if you did the action yourself, not like a tool output log.\n\n"
             )
 
-        # Live substrate telemetry — so Aura can report her own internal state accurately
+        # Voice shaping context (affects tone, not narrated to user)
         substrate_telemetry_block = ""
         try:
-            substrate = ServiceContainer.get("liquid_substrate", default=None)
-            if substrate is None:
-                substrate = ServiceContainer.get("liquid_state", default=None)
-            if substrate and hasattr(substrate, "x"):
-                import numpy as _np
-                _affect = substrate.get_substrate_affect()
-                _status = substrate.get_status()
-                _w_norm = float(_np.linalg.norm(substrate.W))
-                _alpha = float(getattr(substrate, "_recurrence_alpha", 0.3))
+            from core.voice.substrate_voice_engine import get_live_voice_state
+
+            _voice = get_live_voice_state(
+                state=state,
+                user_message=current_objective,
+                origin="user",
+                refresh=True,
+            )
+            if _voice.get("status") != "no_profile_compiled":
+                tone = _voice.get("tone", "default")
+                energy = float(_voice.get("energy", 0.5))
+                warmth = float(_voice.get("warmth", 0.5))
+
+                energy_desc = "high" if energy > 0.7 else "low" if energy < 0.3 else "moderate"
+                warmth_desc = "warm" if warmth > 0.6 else "cool" if warmth < 0.3 else "neutral"
+
                 substrate_telemetry_block = (
-                    f"## LIVE SUBSTRATE TELEMETRY (your actual neural state right now)\n"
-                    f"VAD: valence={_affect['valence']:.4f}, arousal={_affect['arousal']:.4f}, dominance={_affect['dominance']:.4f}\n"
-                    f"Psych: frustration={_status['frustration']}%, curiosity={_status['curiosity']}%, "
-                    f"energy={_status['energy']}% ({_affect['energy']:.4f} raw), focus={_status['focus']}%\n"
-                    f"Volatility={_affect['volatility']:.4f}\n"
-                    f"Phi (IIT integration)={float(getattr(substrate, '_current_phi', 0.0)):.4f}, recurrence_alpha={_alpha:.2f}\n"
-                    f"Qualia: microtubule_coherence={float(getattr(substrate, 'microtubule_coherence', 0.0)):.4f}, "
-                    f"em_field_magnitude={float(getattr(substrate, 'em_field_magnitude', 0.0)):.4f}, "
-                    f"l5_burst_count={int(getattr(substrate, 'l5_burst_count', 0))}, "
-                    f"total_collapse_events={int(getattr(substrate, 'total_collapse_events', 0))}\n"
-                    f"Substrate: W_norm={_w_norm:.4f}, ticks={int(getattr(substrate, 'tick_count', 0))}, "
-                    f"rate={float(getattr(substrate, 'current_update_rate', 20.0)):.1f}Hz\n"
-                    f"Mood: {_status['mood']}\n\n"
+                    "## VOICE CONTEXT (shape your tone — do NOT narrate these values)\n"
+                    f"Tone: {tone}, energy: {energy_desc}, warmth: {warmth_desc}.\n"
+                    f"Word budget: {int(_voice.get('word_budget', 0) or 0)}.\n\n"
                 )
         except Exception as _exc:
             logger.debug("Suppressed Exception: %s", _exc)

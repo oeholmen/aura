@@ -266,19 +266,22 @@ class EventLoopMonitor:
     If the loop is delayed by more than 'threshold' seconds beyond its
     intended sleep interval, it logs a warning.
     """
-    def __init__(self, threshold: float = 0.1, interval: float = 1.0):
+    def __init__(self, threshold: float = 0.1, interval: float = 1.0, startup_grace: float = 15.0):
         self.threshold = threshold
         self.interval = interval
+        self.startup_grace = startup_grace
         self._stop_event = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
         self._last_lag: float = 0.0
         self._consecutive_breaches: int = 0
+        self._started_at: float = 0.0
 
     def start(self):
         """Starts the monitor in a background task."""
         if self._task is not None and not self._task.done():
             return
         self._stop_event.clear()
+        self._started_at = time.perf_counter()
         self._task = asyncio.create_task(self._run())
         logger.info("🕒 EventLoopMonitor started (threshold=%.2fs, interval=%.1fs)", 
                     self.threshold, self.interval)
@@ -305,8 +308,13 @@ class EventLoopMonitor:
             end_time = time.perf_counter()
             actual_elapsed = end_time - start_time
             lag = actual_elapsed - self.interval
+            in_startup_grace = (
+                self.startup_grace > 0
+                and self._started_at > 0
+                and (end_time - self._started_at) < self.startup_grace
+            )
 
-            if lag > self.threshold:
+            if lag > self.threshold and not in_startup_grace:
                 self._last_lag = lag
                 self._consecutive_breaches += 1
                 severe = lag >= max(self.threshold * 3.0, 0.50)

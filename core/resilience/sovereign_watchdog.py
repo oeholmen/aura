@@ -82,6 +82,25 @@ class SovereignWatchdog:
                     except Exception as _exc:
                         logger.debug("Suppressed Exception: %s", _exc)
 
+                    # ── BACKPRESSURE: Suppress non-critical work during lag ──
+                    # When the event loop is stalled, autonomous cognitive work
+                    # (proactive presence, background consolidation, reflections)
+                    # makes it worse. Suppress for a cooldown period proportional
+                    # to the lag severity.
+                    try:
+                        from core.container import ServiceContainer
+                        orch = ServiceContainer.get("orchestrator", default=None)
+                        if orch:
+                            # Suppress proactive presence for lag_seconds * 5
+                            suppress_duration = min(60.0, loop_elapsed * 5.0)
+                            orch._suppress_unsolicited_proactivity_until = time.time() + suppress_duration
+                            logger.info(
+                                "⏳ BACKPRESSURE: Suppressing autonomous work for %.0fs (lag=%.1fs)",
+                                suppress_duration, loop_elapsed,
+                            )
+                    except Exception as _bp_exc:
+                        logger.debug("Backpressure application failed: %s", _bp_exc)
+
             except asyncio.CancelledError:
                 break
             except Exception as e:

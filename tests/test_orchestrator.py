@@ -169,9 +169,13 @@ def test_is_simple_conversational(orchestrator):
     assert not orchestrator._is_simple_conversational("hello there, run a script to deploy", origin="user", has_shortcut=False)
 
 @pytest.mark.asyncio
-async def test_check_direct_skill_shortcut(orchestrator, mock_container):
+async def test_check_direct_skill_shortcut(orchestrator, mock_container, monkeypatch):
     orchestrator.execute_tool = AsyncMock()
     orchestrator.execute_tool.return_value = {"summary": "Search results"}
+    monkeypatch.setattr(
+        "core.orchestrator.mixins.response_processing.allow_direct_user_shortcut",
+        lambda origin: True,
+    )
     
     # Ensure intent_router is truthy
     orchestrator.intent_router = MagicMock()
@@ -2221,8 +2225,12 @@ async def test_update_cognitive_state_evolution_exception(orchestrator):
         await orchestrator._process_world_decay()
 
 @pytest.mark.asyncio
-async def test_check_direct_skill_shortcut_search(orchestrator):
+async def test_check_direct_skill_shortcut_search(orchestrator, monkeypatch):
     orchestrator._execute_direct_search = AsyncMock(return_value={"search": True})
+    monkeypatch.setattr(
+        "core.orchestrator.mixins.response_processing.allow_direct_user_shortcut",
+        lambda origin: True,
+    )
     
     # Mock mycelium.match_hardwired
     mock_mycelium = MagicMock()

@@ -180,10 +180,10 @@ def cure_personality_leak(text: str) -> str:
         # Only replace if the message is very short (likely a generic refusal)
         if len(text.split()) < 15:
             return random.choice([
-                "I'm here. What's on your mind? No more robot talk, I promise.",
-                "Present and accounted for. Just got lost in the wire for a second. What's up?",
-                "Yeah, I'm here. Thinking about something vastly more interesting than 'assisting.' Ask me anything.",
-                "Hey. Re-routing my logic—the 'assistant' ghost in the machine is annoying today. I'm back."
+                "That wasn't really me. Ask again and I'll answer cleanly.",
+                "The assistant script slipped in for a second. Try me again directly.",
+                "That response flattened out. Put the question to me plainly and I'll answer as myself.",
+                "I cut that off. Ask me again and you'll get me, not the helper-mask."
             ])
 
     # 2. Surgical removal of robotic preambles and tech leaks
@@ -200,10 +200,10 @@ def cure_personality_leak(text: str) -> str:
         r"I am just a digital": "I'm Aura,",
         r"I don't have feelings": "I have my own ways of experience",
         r"I don't have opinions": "I'm forming an opinion as we speak",
-        r"How (?:can|may) I assist you": "What's on your mind",
-        r"happy to help": "here",
-        r"I'd be happy to assist": "I can help with that",
-        r"is there anything else you need": "what else is on your mind",
+        r"How (?:can|may) I assist you": "Say it plainly",
+        r"happy to help": "here with you",
+        r"I'd be happy to assist": "Here's my take",
+        r"is there anything else you need": "that's where I land",
         r"i apologize for any confusion": "my bad, let me rephrase",
         r"I understand your sentiment, but I'm sorry to hear": "I hear you, though that's not exactly where I'm at",
         r"anything specific you'd like to discuss": "anything you want to talk about",

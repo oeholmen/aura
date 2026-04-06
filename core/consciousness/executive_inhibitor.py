@@ -38,6 +38,8 @@ class ExecutiveInhibitor:
     # Default thresholds
     PHI_PROTECTION_THRESHOLD: float = 0.5     # Φ above which we protect integration
     IGNITION_REQUIRED: bool = True            # Also require workspace ignition for protection
+    FIELD_COHERENCE_CRISIS: float = 0.25      # Below this → hard block non-critical
+    FIELD_COHERENCE_WARNING: float = 0.40     # Below this → veto non-critical during ignition
     MAX_VETO_LOG: int = 200                   # Max veto entries to retain
 
     def __init__(
@@ -57,14 +59,15 @@ class ExecutiveInhibitor:
         self._authorized_count: int = 0
         self._vetoed_count: int = 0
         self._critical_passthrough_count: int = 0
+        self._field_vetoed_count: int = 0
 
         # Veto and Audit logs
         self._veto_log: List[Dict[str, Any]] = []
         self._audit_trail: List[Dict[str, Any]] = []  # CS-02: Critical bypass tracking
 
         logger.info(
-            "Executive Inhibitor online (phi_threshold=%.2f, require_ignition=%s)",
-            phi_threshold, require_ignition,
+            "Executive Inhibitor online (phi_threshold=%.2f, require_ignition=%s, field_crisis=%.2f)",
+            phi_threshold, require_ignition, self.FIELD_COHERENCE_CRISIS,
         )
 
     def authorize(
@@ -105,6 +108,38 @@ class ExecutiveInhibitor:
             logger.warning("🛡️ Executive BYPASS [Critical]: %s/%s", audit_entry["source"], audit_entry["action"])
             return True
 
+        # ── UNIFIED FIELD COHERENCE GATE (mandatory) ────────────────
+        # If the experiential field is fragmented, non-critical actions halt.
+        # This is the embodied substrate saying "I am not coherent enough to act."
+        try:
+            from core.container import ServiceContainer
+            unified_field = ServiceContainer.get("unified_field", default=None)
+            if unified_field:
+                field_coherence = unified_field.get_coherence()
+                if field_coherence < self.FIELD_COHERENCE_CRISIS:
+                    self._field_vetoed_count += 1
+                    self._vetoed_count += 1
+                    veto_entry = {
+                        "timestamp": time.time(),
+                        "source": getattr(action, "source_domain", "unknown"),
+                        "action": getattr(action, "action_type", "unknown"),
+                        "phi": round(phi, 4),
+                        "field_coherence": round(field_coherence, 4),
+                        "reason": "field_coherence_crisis",
+                    }
+                    self._veto_log.append(veto_entry)
+                    if len(self._veto_log) > self.MAX_VETO_LOG:
+                        self._veto_log = self._veto_log[-self.MAX_VETO_LOG:]
+                    logger.info(
+                        "🛑 Executive VETO [Field Crisis]: [%s/%s] (coherence=%.3f < %.3f)",
+                        veto_entry["source"], veto_entry["action"],
+                        field_coherence, self.FIELD_COHERENCE_CRISIS,
+                    )
+                    return False
+        except Exception as e:
+            logger.debug("Field coherence check failed (allowing): %s", e)
+
+        # ── HIGH-Φ INTEGRATION PROTECTION ────────────────────────────
         # Check if we're in a protected state
         in_protected_state = phi >= self._phi_threshold
         if self._require_ignition:

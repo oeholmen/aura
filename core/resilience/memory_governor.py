@@ -37,9 +37,9 @@ class MemoryGovernor:
         self._last_vacuum_time = time.monotonic()
         self._last_vector_prune_time = time.monotonic()
         self.vector_prune_interval_s = 86400.0
-        self.prune_cooldown_s = 600.0
-        self.unload_cooldown_s = 900.0
-        self.critical_cooldown_s = 300.0
+        self.prune_cooldown_s = 120.0
+        self.unload_cooldown_s = 180.0
+        self.critical_cooldown_s = 60.0
         self.prune_hysteresis_mb = 1024.0
         self.unload_hysteresis_mb = 2048.0
         self._last_prune_action_time = 0.0

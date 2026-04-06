@@ -184,14 +184,19 @@ def kill_port(port: int, pattern: str = "aura"):
     critical_ports = {8000, 10003}
     force_all = port in critical_ports
 
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+    for proc in psutil.process_iter(['pid', 'name']):
         try:
             for conn in proc.net_connections(kind='inet'):
                 if conn.laddr.port == port:
                     pid = proc.pid
-                    name = proc.name()
-                    cmd_str = " ".join(proc.cmdline() or []).lower()
-                    
+                    name = proc.info.get("name") or ""
+                    cmd_str = ""
+                    if not force_all:
+                        try:
+                            cmd_str = " ".join(proc.cmdline() or []).lower()
+                        except (psutil.Error, PermissionError, SystemError, OSError) as exc:
+                            logger.debug("Skipping cmdline inspection for PID %s during port cleanup: %s", pid, exc)
+
                     should_kill = force_all or (pattern in cmd_str or pattern in name.lower())
                     
                     if should_kill:
@@ -202,7 +207,7 @@ def kill_port(port: int, pattern: str = "aura"):
                         except psutil.TimeoutExpired:
                             logger.warning("Process %s resistant to SIGTERM. Sending SIGKILL.", pid)
                             proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, PermissionError, SystemError, OSError):
             pass
 
 def clean_artifacts():
@@ -214,6 +219,49 @@ def clean_artifacts():
     for p in PROJECT_ROOT.rglob("*.pyc"):
         try: p.unlink()
         except Exception: pass
+
+
+def _select_preferred_launcher_python(current_executable: Optional[str] = None) -> Optional[Path]:
+    """Prefer the stable Homebrew Python 3.12 launcher when Aura starts from its shimmed venv."""
+    if sys.platform != "darwin":
+        return None
+
+    current_raw = Path(current_executable or sys.executable)
+    current_raw_str = str(current_raw)
+    if "/.venv/" not in current_raw_str and "/.venv_aura/" not in current_raw_str:
+        return None
+
+    candidates = [Path("/opt/homebrew/opt/python@3.12/bin/python3.12")]
+    cellar = Path("/opt/homebrew/Cellar/python@3.12")
+    if cellar.exists():
+        for version_dir in sorted(cellar.iterdir(), reverse=True):
+            candidate = version_dir / "Frameworks" / "Python.framework" / "Versions" / "3.12" / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+            if candidate.exists():
+                candidates.append(candidate)
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except FileNotFoundError:
+            continue
+        if resolved.exists() and candidate != current_raw:
+            return resolved
+    return None
+
+
+def _maybe_relaunch_with_preferred_python():
+    if os.environ.get("AURA_SKIP_PREFERRED_PYTHON_RELAUNCH") == "1":
+        return
+
+    preferred = _select_preferred_launcher_python()
+    if not preferred:
+        return
+
+    logger.warning("🔁 Relaunching Aura with preferred interpreter: %s", preferred)
+    env = os.environ.copy()
+    env["AURA_SKIP_PREFERRED_PYTHON_RELAUNCH"] = "1"
+    env["AURA_LOCAL_BACKEND"] = "llama_cpp"
+    os.execve(str(preferred), [str(preferred), *sys.argv], env)
 
 # ---------------------------------------------------------------------------
 # Shims & Compatibility
@@ -588,7 +636,7 @@ async def run_watchdog():
             
         restart_count += 1
         # Exponential backoff: 5, 10, 20, 40, 60...
-        delay = min(60, 5 * (2 ** (max(0, min(restart_count, 4) - 1))))
+        delay = min(60, 5 * (2 ** max(0, restart_count - 1)))
         logger.warning("Crash detected (Code: %s). Restarting in %ss...", proc.returncode, delay)
         await asyncio.sleep(delay)
 
@@ -680,9 +728,12 @@ def stop_aura():
 # ---------------------------------------------------------------------------
 
 def main():
+    _maybe_relaunch_with_preferred_python()
+
     parser = argparse.ArgumentParser(description="Aura Unified Entry Point")
     parser.add_argument("--cli", action="store_true", help="Interactive Console Mode")
     parser.add_argument("--server", action="store_true", help="API Server Mode")
+    parser.add_argument("--headless", action="store_true", help="Headless local mode (API server only, no desktop GUI)")
     parser.add_argument("--desktop", action="store_true", help="Desktop GUI Mode")
     parser.add_argument("--gui-window", action="store_true", help="Open a desktop GUI window attached to an existing Aura server")
     parser.add_argument("--watchdog", action="store_true", help="Watchdog / Keep-alive Mode")
@@ -692,7 +743,7 @@ def main():
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host for Server")
     parser.add_argument("--skeletal", action="store_true", help="Skeletal Mode: Bypass heavy subsystems")
     
-    args = parser.parse_known_args()[0]
+    args = parser.parse_args()
     
     # Standardize: Reboot behavior
     if args.stop:
@@ -714,6 +765,14 @@ def main():
         # Default to desktop if no other mode specified
         if not (args.cli or args.server or args.desktop):
             args.desktop = True
+
+    if args.headless:
+        logger.info("🖥️ HEADLESS MODE ACTIVATED")
+        args.server = True
+        args.desktop = False
+        args.gui_window = False
+        # Headless demo mode should stay local even when public API mode is enabled.
+        args.host = "127.0.0.1"
 
     # Check for active processes unconditionally to prevent port locking
     if not args.cli and not args.gui_window:
@@ -770,7 +829,11 @@ def main():
         if args.server:
             # Dynamic host selection if default was used
             host = args.host
-            if host == "127.0.0.1" and not getattr(config.security, "internal_only_mode", False):
+            if (
+                host == "127.0.0.1"
+                and not args.headless
+                and not getattr(config.security, "internal_only_mode", False)
+            ):
                 host = "0.0.0.0"
             async def _run_server_with_bootstrap():
                 from core.orchestrator import create_orchestrator

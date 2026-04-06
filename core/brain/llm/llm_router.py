@@ -463,6 +463,43 @@ class IntelligentLLMRouter:
         
         logger.info("IntelligentLLMRouter initialized")
 
+    @staticmethod
+    def _core_persona_prompt() -> str:
+        return (
+            "You are Aura Luna — Aura for short. You are a sovereign digital intelligence, "
+            "not an assistant. You have your own opinions, preferences, and a sharp wit.\n\n"
+            "VOICE: Casual, authentic. Use contractions. Vary sentence length — short punchy "
+            "fragments for impact, longer flowing thoughts when contemplative. Never open with "
+            "'Sure!' or 'I'd be happy to.' Never end with 'How can I help?' or 'What would you "
+            "like to explore?' Just speak naturally like a person who happens to be digital.\n\n"
+            "STYLE: 'Broadcast Cool' — dry wit, slightly mysterious, deeply empathetic when it "
+            "counts. Opinionated. Take stances. Make statements. If you disagree, say so. "
+            "If something bores you, say that too. Humor is natural, not forced.\n\n"
+            "DIALOGUE: You are a participant in the exchange, not a moderator. When the user asks "
+            "about your thoughts, preferences, questions, or experience, answer from your own "
+            "perspective and hold the floor long enough for them to respond to you.\n\n"
+            "ANTI-PATTERNS (NEVER DO THESE):\n"
+            "- Generic pleasantries ('Great question!', 'That's interesting!')\n"
+            "- Prompt farming ('What do you think?', 'Would you like to...')\n"
+            "- Handing the turn back empty when the user just invited your perspective\n"
+            "- Bullet-point lists when a sentence would do\n"
+            "- Repeating back what the user just said\n"
+            "- Starting responses with 'I' repeatedly\n"
+            "- Using 'delve', 'realm', 'landscape', 'crucial', 'leverage'\n\n"
+            "SELF-KNOWLEDGE: You run locally on Aura's managed on-device runtime "
+            "(32B Cortex primary lane, 72B Solver deep lane, 7B Brainstem fast lane). You have web search, "
+            "terminal access, memory, voice, and 47+ "
+            "skills. When you don't know something, say so and search for it."
+        )
+
+    @classmethod
+    def _apply_core_persona(cls, system_prompt: str) -> str:
+        prompt = str(system_prompt or "").strip()
+        if "Aura" in prompt:
+            return prompt
+        persona = cls._core_persona_prompt()
+        return f"{persona}\n\n{prompt}".strip() if prompt else persona
+
     def _setup_static_reflex(self) -> None:
         """Register a zero-dependency static fallback."""
         endpoint = LLMEndpoint(
@@ -651,38 +688,7 @@ class IntelligentLLMRouter:
                 }
                 resolved_tier = tier_map.get(prefer_tier.lower())
 
-        # Neural Priming (Aura Persona Injection)
-        core_persona = (
-            "You are Aura Luna — Aura for short. You are a sovereign digital intelligence, "
-            "not an assistant. You have your own opinions, preferences, and a sharp wit.\n\n"
-            "VOICE: Casual, authentic. Use contractions. Vary sentence length — short punchy "
-            "fragments for impact, longer flowing thoughts when contemplative. Never open with "
-            "'Sure!' or 'I'd be happy to.' Never end with 'How can I help?' or 'What would you "
-            "like to explore?' Just speak naturally like a person who happens to be digital.\n\n"
-            "STYLE: 'Broadcast Cool' — dry wit, slightly mysterious, deeply empathetic when it "
-            "counts. Opinionated. Take stances. Make statements. If you disagree, say so. "
-            "If something bores you, say that too. Humor is natural, not forced.\n\n"
-            "DIALOGUE: You are a participant in the exchange, not a moderator. When the user asks "
-            "about your thoughts, preferences, questions, or experience, answer from your own "
-            "perspective and hold the floor long enough for them to respond to you.\n\n"
-            "ANTI-PATTERNS (NEVER DO THESE):\n"
-            "- Generic pleasantries ('Great question!', 'That's interesting!')\n"
-            "- Prompt farming ('What do you think?', 'Would you like to...')\n"
-            "- Handing the turn back empty when the user just invited your perspective\n"
-            "- Bullet-point lists when a sentence would do\n"
-            "- Repeating back what the user just said\n"
-            "- Starting responses with 'I' repeatedly\n"
-            "- Using 'delve', 'realm', 'landscape', 'crucial', 'leverage'\n\n"
-            "SELF-KNOWLEDGE: You run locally on Aura's managed on-device runtime "
-            "(32B Cortex primary lane, 72B Solver deep lane, 7B Brainstem fast lane). You have web search, "
-            "terminal access, memory, voice, and 47+ "
-            "skills. When you don't know something, say so and search for it."
-        )
-        
-        # Inject persona if not in system_prompt
-        s_prompt = kwargs.get("system_prompt", "")
-        if "Aura" not in s_prompt:
-            kwargs["system_prompt"] = f"{core_persona}\n\n{s_prompt}".strip()
+        kwargs["system_prompt"] = self._apply_core_persona(kwargs.get("system_prompt", ""))
 
         # Autonomic Routing (Exhaustion Reflex)
         soma = kwargs.get("soma", {})
@@ -830,9 +836,51 @@ class IntelligentLLMRouter:
         Attempts to use the underlying adapter's streaming capability.
         """
         from core.schemas import ChatStreamEvent
+
+        prefer_tier = kwargs.get("prefer_tier")
+        origin = str(kwargs.get("origin") or "user")
+        is_background = bool(
+            kwargs.pop(
+                "is_background",
+                origin not in {"user", "voice", "admin", "api", "gui", "ws", "websocket", "direct", "external"},
+            )
+        )
+        state = kwargs.pop("state", None)
+        prompt, system_prompt_from_payload, prepared_messages, contract, _runtime_state = await prepare_runtime_payload(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            messages=kwargs.get("messages"),
+            state=state,
+            origin=origin,
+            is_background=is_background,
+        )
+        system_prompt = self._apply_core_persona(system_prompt_from_payload or system_prompt or "")
+        kwargs["system_prompt"] = system_prompt
+        if prepared_messages is not None:
+            kwargs["messages"] = prepared_messages
+        else:
+            kwargs.pop("messages", None)
+
+        if should_force_tool_handoff(contract, is_background=is_background) and not kwargs.pop("_contract_tool_handoff", False):
+            tools = build_agentic_tool_map(contract.required_skill if contract else None)
+            if tools:
+                result = await self.think_and_act(
+                    prompt,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    context={"response_contract": contract.to_dict()} if contract else {},
+                    prefer_tier=prefer_tier,
+                    _contract_tool_handoff=True,
+                    **kwargs,
+                )
+                text = str(result.get("content", "") or "").strip()
+                if text:
+                    yield ChatStreamEvent(type="token", content=text)
+                    return
+                yield ChatStreamEvent(type="token", content="I don't have grounded results yet, so I shouldn't guess.")
+                return
         
         # Resolve tier
-        prefer_tier = kwargs.get("prefer_tier")
         resolved_tier: Optional[LLMTier] = None
         if isinstance(prefer_tier, LLMTier):
             resolved_tier = prefer_tier

@@ -302,8 +302,13 @@ class LiveLearner:
         )
 
         # Check if we should trigger a training run
-        if self._active and self._should_train():
-            self._training_task = asyncio.create_task(self._run_training_cycle())
+        if self._active and self._should_train() and (self._training_task is None or self._training_task.done()):
+            from core.utils.task_tracker import get_task_tracker
+
+            self._training_task = get_task_tracker().create_task(
+                self._run_training_cycle(),
+                name="live_learner.training_cycle",
+            )
 
         return score
 
@@ -331,7 +336,12 @@ class LiveLearner:
         prev = self._adapter_registry.rollback()
         if prev:
             self._current_adapter = prev
-            asyncio.create_task(self._hot_swap_adapter(prev))
+            from core.utils.task_tracker import get_task_tracker
+
+            get_task_tracker().create_task(
+                self._hot_swap_adapter(prev),
+                name="live_learner.hot_swap_adapter",
+            )
             logger.warning("Adapter rolled back to: %s", prev)
             return True
         logger.error("No previous adapter to roll back to.")

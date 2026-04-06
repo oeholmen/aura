@@ -256,18 +256,19 @@ class LearningEvolutionMixin:
                 continue
 
             try:
-                from core.executive.executive_core import get_executive_core
+                from core.constitution import get_constitutional_core
 
-                allowed, reason = await get_executive_core().approve_background_task(
-                    "sovereign_self_modification_cycle",
+                allowed, reason, _authority_decision = await get_constitutional_core(self).approve_initiative(
+                    "peer_mode:sovereign_self_modification_cycle",
                     source="peer_mode",
+                    urgency=0.45,
                 )
                 if not allowed:
-                    logger.info("🛠️ Peer Mode: Self-modification cycle deferred by Executive: %s", reason)
+                    logger.info("🛠️ Peer Mode: Self-modification cycle deferred by authority: %s", reason)
                     await asyncio.sleep(3600)
                     continue
             except Exception as exec_err:
-                logger.debug("Self-modification cycle executive gate unavailable: %s", exec_err)
+                logger.debug("Self-modification cycle authority gate unavailable: %s", exec_err)
 
             try:
                 archive = getattr(self, '_private_archive', [])

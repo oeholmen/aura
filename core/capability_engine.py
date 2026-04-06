@@ -45,6 +45,13 @@ from pydantic import BaseModel, Field, ConfigDict
 from core.base_module import AuraBaseModule
 from core.config import config
 from core.container import ServiceContainer
+from core.runtime.service_access import (
+    optional_service,
+    resolve_edi,
+    resolve_homeostatic_coupling,
+    resolve_metabolic_monitor,
+    resolve_state_repository,
+)
 import psutil
 
 
@@ -427,7 +434,8 @@ class CapabilityEngine(AuraBaseModule):
             ],
             # ── System / Info ─────────────────────────────────────────
             "system_proprioception": [
-                r"how (?:are you|is your|your) (?:doing|feeling|health|status|memory|cpu|ram|temperature)",
+                r"how is your (?:health|status|memory|cpu|ram|temperature)",
+                r"how are your (?:memory|cpu|ram|temperature|vitals|stats)",
                 r"system status", r"how much (?:memory|ram|cpu|disk)",
                 r"your (?:vitals|health|stats)", r"are you (?:okay|running (?:well|smoothly))",
             ],
@@ -854,8 +862,8 @@ class CapabilityEngine(AuraBaseModule):
             List[Dict[str, Any]]: List of tool definitions.
         """
         # Phase 22: Metabolic Throttling
-        metabolism = ServiceContainer.get("metabolic_monitor", default=None)
-        homeostasis = ServiceContainer.get("homeostatic_coupling", default=None)
+        metabolism = resolve_metabolic_monitor(default=None)
+        homeostasis = resolve_homeostatic_coupling(default=None)
         
         health_score = 1.0
         if homeostasis:
@@ -1011,7 +1019,7 @@ class CapabilityEngine(AuraBaseModule):
             # 1. Verification
             if skill_name not in self.skills:
                 # ── Pillar 2: Hephaestus (Autonomous Forge) ──
-                hephaestus = ServiceContainer.get("hephaestus_engine", default=None)
+                hephaestus = optional_service("hephaestus_engine", default=None)
                 objective = ctx.get("objective") or ctx.get("message")
                 
                 if hephaestus and objective:
@@ -1107,8 +1115,8 @@ class CapabilityEngine(AuraBaseModule):
 
             # 2a. Metabolic self-preservation guard
             try:
-                metabolism = ServiceContainer.get("metabolic_monitor", default=None)
-                repo = ServiceContainer.get("state_repository", default=None)
+                metabolism = resolve_metabolic_monitor(default=None)
+                repo = resolve_state_repository(default=None)
                 current_state = getattr(repo, "_current", None) if repo is not None else None
                 phi = float(getattr(current_state, "phi", 0.0) or 0.0) if current_state is not None else 0.0
                 snapshot = metabolism.get_current_metabolism() if metabolism else None
@@ -1161,7 +1169,7 @@ class CapabilityEngine(AuraBaseModule):
                 self.logger.debug("CapabilityEngine: metabolic self-preservation check skipped: %s", e)
 
             # 2. EDI Autonomy & Security Check (Phase 23.4)
-            edi = ServiceContainer.get("edi", default=None)
+            edi = resolve_edi(default=None)
             if edi and hasattr(edi, "can_do"):
                 # Infer risk level: > 2 cost is high risk, system mutations are critical
                 risk = "low"
@@ -1305,7 +1313,7 @@ class CapabilityEngine(AuraBaseModule):
                         success=bool(isinstance(result, dict) and result.get("ok", False)),
                     )
             except Exception as _exc:
-                logger.debug("Suppressed Exception: %s", _exc)
+                self.logger.debug("Suppressed Exception: %s", _exc)
 
     def _apply_security(self, skill_name: str, params: Dict[str, Any]) -> Union[Dict[str, Any], Dict[str, str]]:
         """Issue 54: Scoped security adaptation for skill parameters."""

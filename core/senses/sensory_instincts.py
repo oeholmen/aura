@@ -45,15 +45,40 @@ class SensoryInstincts:
 
     def trigger_spike(self, modality: str, intensity: float, emotion: str = "curiosity"):
         """Directly influence the LiquidState based on sensory input."""
+        applied_intensity = max(0.0, float(intensity))
+        try:
+            authority = ServiceContainer.get("substrate_authority", default=None)
+            if authority is not None:
+                from core.consciousness.substrate_authority import (
+                    ActionCategory,
+                    AuthorizationDecision,
+                )
+
+                verdict = authority.authorize(
+                    content=f"{emotion}:{modality}:{applied_intensity:.2f}",
+                    source="sensory_instincts",
+                    category=ActionCategory.STATE_MUTATION,
+                    priority=min(1.0, applied_intensity),
+                    is_critical=False,
+                )
+                if verdict.decision == AuthorizationDecision.BLOCK:
+                    logger.info("⚡ Gut Reaction blocked by substrate authority (%s)", verdict.reason)
+                    return False
+                if verdict.decision == AuthorizationDecision.CONSTRAIN:
+                    applied_intensity *= 0.5
+        except Exception as exc:
+            logger.debug("SensoryInstincts authority gate unavailable: %s", exc)
+
         ls = ServiceContainer.get("liquid_state", default=None)
         if not ls:
-            return
+            return False
             
         if emotion == "curiosity":
-            ls.update(delta_curiosity=intensity)
+            ls.update(delta_curiosity=applied_intensity)
         elif emotion == "frustration":
-            ls.update(delta_frustration=intensity)
+            ls.update(delta_frustration=applied_intensity)
         
         from core.thought_stream import get_emitter
-        get_emitter().emit(f"Gut Reaction ⚡", f"Detected {modality} stimulus (intensity: {intensity:.2f})", level="warning")
-        logger.info("⚡ Gut Reaction: %s spike via %s (%.2f)", emotion, modality, intensity)
+        get_emitter().emit(f"Gut Reaction ⚡", f"Detected {modality} stimulus (intensity: {applied_intensity:.2f})", level="warning")
+        logger.info("⚡ Gut Reaction: %s spike via %s (%.2f)", emotion, modality, applied_intensity)
+        return True

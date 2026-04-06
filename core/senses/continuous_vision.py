@@ -105,7 +105,7 @@ class ContinuousSensoryBuffer:
         if time.monotonic() < self._screen_probe_cooldown_until:
             return False
         if not await self._screen_permission_active():
-            self._screen_probe_cooldown_until = time.monotonic() + 60.0
+            self._screen_probe_cooldown_until = time.monotonic() + 15.0
             return False
         try:
             sct = await asyncio.to_thread(self._mss_module.mss)
@@ -119,7 +119,7 @@ class ContinuousSensoryBuffer:
             logger.info("👁️ [VISION] Continuous screen capture backend initialized.")
             return True
         except Exception as exc:
-            self._screen_probe_cooldown_until = time.monotonic() + 60.0
+            self._screen_probe_cooldown_until = time.monotonic() + 15.0
             logger.warning("👁️ [VISION] Continuous screen capture backend unavailable: %s", exc)
             return False
 

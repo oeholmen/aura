@@ -10,7 +10,7 @@ import numpy as np
 
 from core.container import ServiceContainer
 from core.predictive.predictive_self_model import PredictiveSelfModel
-from core.consciousness.executive_authority import get_executive_authority
+from core.runtime.proposal_governance import propose_governed_initiative_to_state
 
 logger = logging.getLogger("Aura.ExecutiveClosure")
 
@@ -94,9 +94,10 @@ class ExecutiveClosureEngine:
         active_goal_count = self._sync_active_goals(state, selected_objective)
 
         if selected_objective and not getattr(state.cognition, "current_objective", None):
-            state, decision = await get_executive_authority().propose_initiative_to_state(
+            state, decision = await propose_governed_initiative_to_state(
                 state,
                 selected_objective,
+                orchestrator=None,
                 source="executive_closure",
                 kind="executive_closure",
                 urgency=max(0.45, min(0.98, need_pressure)),
@@ -249,13 +250,59 @@ class ExecutiveClosureEngine:
         free_energy = _clamp01(float(closed_loop_status.get("free_energy", getattr(state, "free_energy", 0.0)) or 0.0))
         vitality = _clamp01(float(homeostasis_status.get("will_to_live", getattr(state, "vitality", 1.0)) or 1.0))
 
+        # ── SUBSTRATE-DERIVED PRESSURES ──────────────────────────────
+        # The unified field, neurochemical state, and interoceptive body
+        # are now PRIMARY inputs to pressure computation — not supplements.
+        # The executive closure derives its "needs" from the substrate.
+        field_coherence = 0.6
+        field_valence = 0.0
+        chem_stress = 0.0
+        chem_motivation = 0.5
+        chem_sociality = 0.4
+        body_budget = 0.0
+        body_energy = 0.5
+
+        try:
+            unified_field = ServiceContainer.get("unified_field", default=None)
+            if unified_field:
+                quality = unified_field.get_experiential_quality()
+                field_coherence = quality.get("coherence", 0.6)
+                field_valence = quality.get("valence", 0.0)
+        except Exception:
+            pass
+
+        try:
+            ncs = ServiceContainer.get("neurochemical_system", default=None)
+            if ncs:
+                mood = ncs.get_mood_vector()
+                chem_stress = mood.get("stress", 0.0)
+                chem_motivation = mood.get("motivation", 0.5)
+                chem_sociality = mood.get("sociality", 0.4)
+        except Exception:
+            pass
+
+        try:
+            intero = ServiceContainer.get("embodied_interoception", default=None)
+            if intero:
+                bb = intero.get_body_budget()
+                body_budget = bb.get("budget", 0.0)
+                body_energy = bb.get("energy_reserves", 0.5)
+        except Exception:
+            pass
+
+        # Stability pressure: now includes field incoherence + chemical stress +
+        # body energy deficit — the substrate IS the stability signal.
         stability_pressure = max(
             deficit("energy"),
             1.0 - float(homeostasis_status.get("metabolism", 1.0)),
             cpu_pressure,
             free_energy,
             1.0 - vitality,
+            1.0 - field_coherence,       # incoherent field = instability
+            chem_stress,                  # chemical stress = instability
+            1.0 - body_energy,            # low body energy = instability
         )
+
         integrity_pressure = max(
             deficit("integrity"),
             1.0 - float(homeostasis_status.get("integrity", 1.0)),
@@ -264,18 +311,23 @@ class ExecutiveClosureEngine:
 
         # Novelty should drive exploration only when the runtime is healthy enough
         # to sustain it. Under stress, closure should bias toward stabilization.
+        # Chemical motivation directly modulates exploration headroom.
         survival_guard = max(stability_pressure, integrity_pressure)
-        exploration_headroom = max(0.3, 1.0 - (survival_guard * 0.75))
-        consolidation_headroom = max(0.35, 1.0 - (survival_guard * 0.6))
+        exploration_headroom = max(0.15, min(1.0,
+            (1.0 - survival_guard * 0.75) * (0.5 + chem_motivation * 0.5)
+        ))
+        consolidation_headroom = max(0.2, 1.0 - (survival_guard * 0.6))
 
         curiosity_drive = max(
             deficit("curiosity"),
             min(1.0, prediction_error * 0.55),
             free_energy * 0.35,
         )
+        # Social drive now includes neurochemical sociality (oxytocin/serotonin)
         social_drive = max(
             deficit("social"),
             _clamp01(float(getattr(state.affect, "social_hunger", 0.5))),
+            chem_sociality * 0.6,
         )
         growth_drive = max(
             deficit("growth"),

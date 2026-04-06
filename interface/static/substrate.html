@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aura — Live Substrate</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #030005;
+            color: #e0dfe4;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            padding: 24px;
+            min-height: 100vh;
+        }
+        h1 {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            color: #7c6f9b;
+            margin-bottom: 20px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            max-width: 900px;
+        }
+        .card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .card h2 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #9b8fc2;
+            margin-bottom: 12px;
+        }
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 0;
+            font-size: 13px;
+        }
+        .metric .label { color: #8a8694; }
+        .metric .value {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .bar-container {
+            width: 120px;
+            height: 6px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 3px;
+            overflow: hidden;
+            display: inline-block;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .bar {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.8s ease, background 0.8s ease;
+        }
+        .mood-buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+        .mood-btn {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px;
+            color: #c8c4d0;
+            padding: 6px 14px;
+            font-size: 12px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+        .mood-btn:hover {
+            background: rgba(124,111,155,0.2);
+            border-color: rgba(124,111,155,0.4);
+        }
+        .mood-btn.active {
+            background: rgba(124,111,155,0.3);
+            border-color: #7c6f9b;
+            color: #fff;
+        }
+        .compilation {
+            font-size: 11px;
+            color: #6b6578;
+            margin-top: 8px;
+            line-height: 1.5;
+        }
+        .tag {
+            display: inline-block;
+            background: rgba(124,111,155,0.15);
+            border-radius: 3px;
+            padding: 1px 6px;
+            margin: 2px;
+            font-size: 10px;
+            color: #9b8fc2;
+        }
+        .positive { color: #6bce8a; }
+        .negative { color: #ce6b6b; }
+        .neutral { color: #8a8694; }
+        .highlight { color: #c4a1f7; }
+        .status {
+            font-size: 11px;
+            color: #4a4556;
+            margin-top: 16px;
+            text-align: center;
+        }
+        .phi-special {
+            font-size: 18px;
+            color: #c4a1f7;
+            text-align: center;
+            padding: 8px;
+        }
+        .phi-label {
+            font-size: 10px;
+            color: #6b6578;
+            text-align: center;
+        }
+        #fullCard {
+            grid-column: 1 / -1;
+        }
+    </style>
+</head>
+<body>
+    <h1>Aura — Live Substrate State</h1>
+
+    <div class="grid">
+        <div class="card">
+            <h2>Voice Profile</h2>
+            <div class="metric">
+                <span class="label">Word Budget</span>
+                <span class="value" id="wordBudget">—</span>
+            </div>
+            <div class="metric">
+                <span class="label">Tone</span>
+                <span class="value highlight" id="tone">—</span>
+            </div>
+            <div class="metric">
+                <span class="label">Energy</span>
+                <span class="value" id="energy">—</span>
+                <div class="bar-container"><div class="bar" id="energyBar" style="width:50%;background:#7c6f9b"></div></div>
+            </div>
+            <div class="metric">
+                <span class="label">Warmth</span>
+                <span class="value" id="warmth">—</span>
+                <div class="bar-container"><div class="bar" id="warmthBar" style="width:50%;background:#6bce8a"></div></div>
+            </div>
+            <div class="metric">
+                <span class="label">Directness</span>
+                <span class="value" id="directness">—</span>
+                <div class="bar-container"><div class="bar" id="directnessBar" style="width:50%;background:#ce8a6b"></div></div>
+            </div>
+            <div class="metric">
+                <span class="label">Playfulness</span>
+                <span class="value" id="playfulness">—</span>
+                <div class="bar-container"><div class="bar" id="playfulnessBar" style="width:50%;background:#6bce8a"></div></div>
+            </div>
+            <div class="metric">
+                <span class="label">Vocabulary</span>
+                <span class="value" id="vocab">—</span>
+            </div>
+            <div class="metric">
+                <span class="label">Questions</span>
+                <span class="value" id="questions">—</span>
+            </div>
+            <div class="metric">
+                <span class="label">Follow-up</span>
+                <span class="value" id="followup">—</span>
+            </div>
+            <div class="metric">
+                <span class="label">Exclamation</span>
+                <span class="value" id="exclamation">—</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Unified Field</h2>
+            <div class="phi-special" id="phi">Φ = —</div>
+            <div class="phi-label">Integrated Information (IIT 4.0)</div>
+            <div class="metric" style="margin-top:12px">
+                <span class="label">Coherence</span>
+                <span class="value" id="coherence">—</span>
+                <div class="bar-container"><div class="bar" id="coherenceBar" style="width:50%;background:#c4a1f7"></div></div>
+            </div>
+            <div class="metric">
+                <span class="label">Intensity</span>
+                <span class="value" id="intensity">—</span>
+                <div class="bar-container"><div class="bar" id="intensityBar" style="width:50%;background:#f7a1c4"></div></div>
+            </div>
+            <div class="metric">
+                <span class="label">Clarity</span>
+                <span class="value" id="clarity">—</span>
+                <div class="bar-container"><div class="bar" id="clarityBar" style="width:50%;background:#a1c4f7"></div></div>
+            </div>
+            <div class="metric">
+                <span class="label">Flow</span>
+                <span class="value" id="flow">—</span>
+                <div class="bar-container"><div class="bar" id="flowBar" style="width:50%;background:#a1f7c4"></div></div>
+            </div>
+            <div class="metric">
+                <span class="label">Complexity</span>
+                <span class="value" id="complexity">—</span>
+                <div class="bar-container"><div class="bar" id="complexityBar" style="width:50%;background:#f7c4a1"></div></div>
+            </div>
+            <div class="metric">
+                <span class="label">Field Valence</span>
+                <span class="value" id="fieldValence">—</span>
+            </div>
+            <div class="metric">
+                <span class="label">Mode Focus</span>
+                <span class="value" id="modeFocus">—</span>
+            </div>
+        </div>
+
+        <div class="card" id="fullCard">
+            <h2>Affect Modulation</h2>
+            <div class="mood-buttons">
+                <button class="mood-btn" data-mood="neutral" onclick="shiftMood('neutral')">Neutral</button>
+                <button class="mood-btn" data-mood="energized" onclick="shiftMood('energized')">Energized</button>
+                <button class="mood-btn" data-mood="tired" onclick="shiftMood('tired')">Tired</button>
+                <button class="mood-btn" data-mood="frustrated" onclick="shiftMood('frustrated')">Frustrated</button>
+                <button class="mood-btn" data-mood="warm" onclick="shiftMood('warm')">Warm</button>
+                <button class="mood-btn" data-mood="curious" onclick="shiftMood('curious')">Curious</button>
+            </div>
+            <div class="compilation" id="sources"></div>
+        </div>
+    </div>
+
+    <div class="status" id="status">Connecting...</div>
+
+    <script>
+        const TOKEN = 'aura-superuser-token';
+        const BASE = window.location.origin;
+        let currentMood = '';
+
+        function colorForValue(v, invert = false) {
+            if (invert) v = 1 - v;
+            if (v > 0.65) return '#6bce8a';
+            if (v > 0.35) return '#c4a1f7';
+            return '#ce6b6b';
+        }
+
+        function updateBar(id, value, color) {
+            const bar = document.getElementById(id);
+            if (bar) {
+                bar.style.width = (value * 100) + '%';
+                if (color) bar.style.background = color;
+            }
+        }
+
+        function setActiveMood(mood) {
+            document.querySelectorAll('.mood-btn').forEach(btn => {
+                btn.classList.toggle('active', Boolean(mood) && btn.dataset.mood === mood);
+            });
+            currentMood = mood || '';
+        }
+
+        function renderVoiceProfile(v) {
+            document.getElementById('wordBudget').textContent = v.word_budget;
+            document.getElementById('tone').textContent = v.tone || 'default';
+            document.getElementById('energy').textContent = (v.energy || 0).toFixed(2);
+            document.getElementById('warmth').textContent = (v.warmth || 0).toFixed(2);
+            document.getElementById('directness').textContent = (v.directness || 0).toFixed(2);
+            document.getElementById('playfulness').textContent = (v.playfulness || 0).toFixed(2);
+            document.getElementById('vocab').textContent = v.vocabulary || '—';
+            document.getElementById('questions').textContent = (((v.question_probability ?? v.question_prob) || 0) * 100).toFixed(0) + '%';
+            document.getElementById('followup').textContent = (((v.followup_probability ?? v.followup_prob) || 0) * 100).toFixed(0) + '%';
+            document.getElementById('exclamation').textContent = v.exclamation_allowed ? 'On' : 'Off';
+
+            updateBar('energyBar', v.energy || 0, colorForValue(v.energy || 0));
+            updateBar('warmthBar', v.warmth || 0, colorForValue(v.warmth || 0));
+            updateBar('directnessBar', v.directness || 0);
+            updateBar('playfulnessBar', v.playfulness || 0, colorForValue(v.playfulness || 0));
+        }
+
+        function renderDemoHold(demoOverride) {
+            if (demoOverride && demoOverride.active) {
+                const seconds = Math.max(0, Math.ceil(demoOverride.seconds_remaining || 0));
+                setActiveMood(demoOverride.mood || currentMood);
+                document.getElementById('status').textContent = `Demo hold · ${demoOverride.mood || currentMood} · ${seconds}s left`;
+                return;
+            }
+
+            setActiveMood('');
+            document.getElementById('status').textContent = `Live · Updated ${new Date().toLocaleTimeString()}`;
+        }
+
+        async function fetchVoiceState() {
+            try {
+                const res = await fetch(`${BASE}/api/voice/state`, {
+                    headers: { 'Authorization': `Bearer ${TOKEN}` }
+                });
+                const data = await res.json();
+                const v = data.voice;
+                if (!v || v.status === 'no_profile_compiled') {
+                    document.getElementById('status').textContent = 'Waiting for first response to compile profile...';
+                    return;
+                }
+
+                renderVoiceProfile(v);
+
+                // Substrate snapshot
+                const s = v.substrate_snapshot || {};
+                const phi = s.phi || 0;
+                document.getElementById('phi').textContent = `Φ = ${phi.toFixed(6)}`;
+                document.getElementById('phi').style.color = phi > 0.001 ? '#c4a1f7' : '#6b6578';
+
+                document.getElementById('coherence').textContent = (s.coherence || 0).toFixed(4);
+                document.getElementById('intensity').textContent = (s.field_intensity || 0).toFixed(4);
+                document.getElementById('clarity').textContent = (s.field_clarity || 0).toFixed(4);
+                document.getElementById('flow').textContent = (s.field_flow || 0).toFixed(4);
+                document.getElementById('complexity').textContent = (s.field_complexity || 0).toFixed(4);
+                document.getElementById('fieldValence').textContent = (s.field_valence || 0).toFixed(4);
+                document.getElementById('modeFocus').textContent = (s.mode_focus || 0).toFixed(4);
+
+                updateBar('coherenceBar', s.coherence || 0, colorForValue(s.coherence || 0));
+                updateBar('intensityBar', s.field_intensity || 0);
+                updateBar('clarityBar', s.field_clarity || 0, colorForValue(s.field_clarity || 0));
+                updateBar('flowBar', s.field_flow || 0, colorForValue(s.field_flow || 0));
+                updateBar('complexityBar', s.field_complexity || 0);
+
+                // Sources
+                const sources = (v.compilation_source || '').split(', ').filter(Boolean);
+                document.getElementById('sources').innerHTML =
+                    '<strong>Compilation:</strong> ' +
+                    sources.map(s => `<span class="tag">${s}</span>`).join('');
+
+                renderDemoHold(v.demo_override);
+            } catch (e) {
+                document.getElementById('status').textContent = 'Connection error: ' + e.message;
+            }
+        }
+
+        async function shiftMood(mood) {
+            setActiveMood(mood);
+
+            try {
+                const res = await fetch(`${BASE}/api/voice/affect-modulate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${TOKEN}`
+                    },
+                    body: JSON.stringify({ mood, hold_seconds: 30 })
+                });
+                const data = await res.json();
+                if (data.resulting_voice) {
+                    const v = data.resulting_voice;
+                    renderVoiceProfile(v);
+                    renderDemoHold(data.demo_override || {
+                        active: true,
+                        mood,
+                        seconds_remaining: data.hold_seconds || 30
+                    });
+                    setTimeout(() => fetchVoiceState(), 150);
+                }
+            } catch (e) {
+                document.getElementById('status').textContent = 'Shift failed: ' + e.message;
+            }
+        }
+
+        // Poll quickly enough to feel live during demos without needing a manual refresh.
+        setInterval(fetchVoiceState, 1000);
+        fetchVoiceState();
+    </script>
+</body>
+</html>

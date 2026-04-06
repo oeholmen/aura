@@ -286,14 +286,7 @@ class EpisodicMemory:
                 metadata={"context": str(context or "")[:120], "action": str(action or "")[:120]},
             )
             if not approved:
-                record_degraded_event(
-                    "episodic_memory",
-                    "memory_write_blocked",
-                    detail=preview[:160],
-                    severity="warning",
-                    classification="background_degraded",
-                    context={"reason": reason},
-                )
+                logger.info("EpisodicMemory: deferring episode write: %s", reason)
             return approved
         except Exception as exc:
             if self._constitutional_runtime_live():

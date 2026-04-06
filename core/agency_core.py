@@ -710,35 +710,31 @@ class AgencyCore:
         if not self._constitutional_runtime_live():
             return True
         try:
-            from core.executive.executive_core import (
-                ActionType,
-                DecisionOutcome,
-                Intent,
-                IntentSource,
-                get_executive_core,
-            )
+            from core.constitution import get_constitutional_core
 
-            intent = Intent(
-                source=IntentSource.AUTONOMOUS,
-                goal=f"agency_state:{kind}",
-                action_type=ActionType.MUTATE_STATE,
-                payload={"kind": kind, "content": str(content)[:500]},
-                priority=max(0.1, min(1.0, float(priority))),
-                requires_memory_commit=True,
+            approved, reason = get_constitutional_core().approve_state_mutation_sync(
+                "autonomous",
+                f"agency_core:{kind}:{str(content)[:180]}",
+                urgency=max(0.1, min(1.0, float(priority))),
             )
-            record = get_executive_core().request_approval_sync(intent)
-            if record.outcome in (DecisionOutcome.APPROVED, DecisionOutcome.DEGRADED):
+            if approved:
                 return True
+            event_reason = "agency_state_mutation_blocked"
+            if any(
+                marker in str(reason or "")
+                for marker in ("gate_failed", "required", "unavailable")
+            ):
+                event_reason = "agency_state_mutation_gate_failed"
             try:
                 from core.health.degraded_events import record_degraded_event
 
                 record_degraded_event(
                     "agency_core",
-                    "agency_state_mutation_blocked",
+                    event_reason,
                     detail=kind,
                     severity="warning",
                     classification="background_degraded",
-                    context={"reason": record.reason},
+                    context={"reason": reason},
                 )
             except Exception as degraded_exc:
                 logger.debug("AgencyCore degraded-event logging failed: %s", degraded_exc)

@@ -46,8 +46,8 @@ NARRATIVE_PATH   = Path.home() / ".aura" / "data" / "self_narrative.json"
 CONSOL_LOG_PATH  = Path.home() / ".aura" / "data" / "consolidation_log.jsonl"
 MAX_NARRATIVE_AGE_HOURS = 96          # force re-consolidation after 4 days
 INFERENCE_TIMEOUT_SECS  = 60.0        # max time to wait for LLM consolidation
-MAX_CONSECUTIVE_FAILURES = 4          # exponential backoff ceiling
-_BACKOFF_BASE_SECS = 300.0            # 5 min initial backoff after failure
+MAX_CONSECUTIVE_FAILURES = 6          # exponential backoff ceiling
+_BACKOFF_BASE_SECS = 60.0             # 1 min initial backoff after failure
 
 
 @dataclass

@@ -102,8 +102,13 @@ def register_all_services(is_proxy: bool = False):
 
     # 2.2 Digital Organism Extensions (2026 Phase)
     def _create_self_model():
-        from core.self.self_model import SelfModel
+        from core.self_model import SelfModel
         return SelfModel()
+
+    def _create_canonical_self_engine():
+        from core.self.canonical_self import get_canonical_self_engine
+
+        return get_canonical_self_engine()
 
     def _create_identity_anchor():
         from core.identity.identity_anchor import IdentityAnchor
@@ -122,6 +127,13 @@ def register_all_services(is_proxy: bool = False):
         return MetaCognition()
 
     container.register('self_model', _create_self_model, lifetime=ServiceLifetime.SINGLETON)
+    container.register('canonical_self_engine', _create_canonical_self_engine, lifetime=ServiceLifetime.SINGLETON)
+    container.register(
+        'canonical_self',
+        lambda canonical_self_engine: canonical_self_engine.get_self(),
+        lifetime=ServiceLifetime.SINGLETON,
+        required=False,
+    )
     container.register('identity_anchor', _create_identity_anchor, lifetime=ServiceLifetime.SINGLETON)
     container.register('goal_engine', _create_goal_engine, lifetime=ServiceLifetime.SINGLETON)
     container.register('internal_simulator', _create_internal_simulator, lifetime=ServiceLifetime.SINGLETON)

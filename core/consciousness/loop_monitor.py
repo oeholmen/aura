@@ -97,8 +97,11 @@ class ConsciousnessLoopMonitor:
         if self._running:
             return
         self._running = True
-        self._task = asyncio.create_task(
-            self._loop(), name="ConsciousnessLoopMonitor"
+        from core.utils.task_tracker import get_task_tracker
+
+        self._task = get_task_tracker().create_task(
+            self._loop(),
+            name="ConsciousnessLoopMonitor",
         )
         logger.info("🔍 ConsciousnessLoopMonitor started (interval=%.0fs)", HEALTH_CHECK_INTERVAL)
 

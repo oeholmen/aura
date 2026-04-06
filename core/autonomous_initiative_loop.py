@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Set
 from core.container import ServiceContainer
 from core.health.degraded_events import get_unified_failure_state, record_degraded_event
 from core.runtime.background_policy import background_activity_allowed
+from core.runtime.service_access import optional_service, resolve_orchestrator, resolve_state_repository
 from core.utils.task_tracker import task_tracker
 
 logger = logging.getLogger("Aura.Initiative")
@@ -33,7 +34,7 @@ class AutonomousInitiativeLoop:
     name = "autonomous_initiative_loop"
 
     def __init__(self, orchestrator=None):
-        self.orchestrator = orchestrator or ServiceContainer.get("orchestrator", default=None)
+        self.orchestrator = orchestrator or resolve_orchestrator(default=None)
         self.running = False
         self.rss_feeds = [
             "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
@@ -64,7 +65,7 @@ class AutonomousInitiativeLoop:
         # Subscribe to proactive initiations from Jarvis/Fictional Engine (BUG-032)
         try:
             from core.service_names import ServiceNames
-            bus = ServiceContainer.get(ServiceNames.EVENT_BUS, default=None)
+            bus = optional_service(ServiceNames.EVENT_BUS, default=None)
             if bus:
                 queue = await bus.subscribe("aura.proactive.initiation")
                 self._event_task = task_tracker.create_task(
@@ -211,87 +212,106 @@ class AutonomousInitiativeLoop:
             )
 
         # Trigger the SensoryMotor browser actuation
-        if self.orchestrator:
-            sensory_motor = ServiceContainer.get("sensory_motor_cortex", default=None)
-            if sensory_motor:
-                from core.constitution import get_constitutional_core
+        if not self.orchestrator:
+            record_degraded_event(
+                "autonomous_initiative_loop",
+                "research_orchestrator_missing",
+                detail=topic[:160],
+                severity="warning",
+                classification="background_degraded",
+            )
+            return
 
-                try:
-                    handle = await get_constitutional_core(self.orchestrator).begin_tool_execution(
-                        "sensory_motor_browser_research",
-                        {"query": topic},
-                        source="autonomous_initiative_loop",
-                        objective=f"Research knowledge gap: {topic}",
-                    )
-                except Exception as exc:
-                    record_degraded_event(
-                        "autonomous_initiative_loop",
-                        "research_tool_gate_failed",
-                        detail=f"{topic[:120]}:{type(exc).__name__}",
-                        severity="warning",
-                        classification="background_degraded",
-                        context={"topic": topic},
-                        exc=exc,
-                    )
-                    return
+        sensory_motor = optional_service("sensory_motor_cortex", default=None)
+        if not sensory_motor:
+            record_degraded_event(
+                "autonomous_initiative_loop",
+                "research_tool_unavailable",
+                detail="sensory_motor_cortex",
+                severity="warning",
+                classification="background_degraded",
+                context={"topic": topic[:160]},
+            )
+            return
 
-                if not handle.approved:
-                    record_degraded_event(
-                        "autonomous_initiative_loop",
-                        "research_tool_blocked",
-                        detail=topic[:160],
-                        severity="warning",
-                        classification="background_degraded",
-                        context={"reason": handle.decision.reason},
-                    )
-                    return
+        from core.constitution import get_constitutional_core
 
-                content = ""
-                success = False
-                error_text = None
-                started = time.perf_counter()
-                try:
-                    content = await sensory_motor.actuate_browser(topic)
-                    success = bool(content)
-                    if not success:
-                        error_text = "empty_result"
-                except Exception as exc:
-                    error_text = f"{type(exc).__name__}: {exc}"
-                    record_degraded_event(
-                        "autonomous_initiative_loop",
-                        "research_tool_failed",
-                        detail=topic[:160],
-                        severity="warning",
-                        classification="background_degraded",
-                        context={"error": error_text},
-                        exc=exc,
-                    )
-                finally:
-                    duration_ms = (time.perf_counter() - started) * 1000.0
-                    try:
-                        await get_constitutional_core(self.orchestrator).finish_tool_execution(
-                            handle,
-                            result=(content[:1000] if content else error_text),
-                            success=success,
-                            duration_ms=duration_ms,
-                            error=error_text,
-                        )
-                    except Exception as finish_exc:
-                        logger.debug("AutonomousInitiativeLoop tool finish skipped: %s", finish_exc)
+        try:
+            handle = await get_constitutional_core(self.orchestrator).begin_tool_execution(
+                "sensory_motor_browser_research",
+                {"query": topic},
+                source="autonomous_initiative_loop",
+                objective=f"Research knowledge gap: {topic}",
+            )
+        except Exception as exc:
+            record_degraded_event(
+                "autonomous_initiative_loop",
+                "research_tool_gate_failed",
+                detail=f"{topic[:120]}:{type(exc).__name__}",
+                severity="warning",
+                classification="background_degraded",
+                context={"topic": topic},
+                exc=exc,
+            )
+            return
 
-                if _emit_thought and content:
-                    _emit_thought(
-                        "Research Result",
-                        f"On '{topic}': {content[:800]}",
-                        level="info",
-                        category="Research",
-                    )
-                    # Signal heartstone: successful research raises Curiosity
-                    try:
-                        from core.affect.heartstone_values import get_heartstone_values
-                        get_heartstone_values().on_research_success(len(content))
-                    except Exception as _exc:
-                        logger.debug("Suppressed Exception: %s", _exc)
+        if not handle.approved:
+            record_degraded_event(
+                "autonomous_initiative_loop",
+                "research_tool_blocked",
+                detail=topic[:160],
+                severity="warning",
+                classification="background_degraded",
+                context={"reason": handle.decision.reason},
+            )
+            return
+
+        content = ""
+        success = False
+        error_text = None
+        started = time.perf_counter()
+        try:
+            content = await sensory_motor.actuate_browser(topic)
+            success = bool(content)
+            if not success:
+                error_text = "empty_result"
+        except Exception as exc:
+            error_text = f"{type(exc).__name__}: {exc}"
+            record_degraded_event(
+                "autonomous_initiative_loop",
+                "research_tool_failed",
+                detail=topic[:160],
+                severity="warning",
+                classification="background_degraded",
+                context={"error": error_text},
+                exc=exc,
+            )
+        finally:
+            duration_ms = (time.perf_counter() - started) * 1000.0
+            try:
+                await get_constitutional_core(self.orchestrator).finish_tool_execution(
+                    handle,
+                    result=(content[:1000] if content else error_text),
+                    success=success,
+                    duration_ms=duration_ms,
+                    error=error_text,
+                )
+            except Exception as finish_exc:
+                logger.debug("AutonomousInitiativeLoop tool finish skipped: %s", finish_exc)
+
+        if _emit_thought and content:
+            _emit_thought(
+                "Research Result",
+                f"On '{topic}': {content[:800]}",
+                level="info",
+                category="Research",
+            )
+            # Signal heartstone: successful research raises Curiosity
+            try:
+                from core.affect.heartstone_values import get_heartstone_values
+                get_heartstone_values().on_research_success(len(content))
+            except Exception as _exc:
+                logger.debug("Suppressed Exception: %s", _exc)
 
     async def _evaluate_initiative(self, topic: str) -> Dict[str, Any]:
         active_commitments = 0
@@ -302,7 +322,7 @@ class AutonomousInitiativeLoop:
         load_pressure = 0.0
         affective_pressure = 0.0
 
-        repo = ServiceContainer.get("state_repository", default=None)
+        repo = resolve_state_repository(default=None)
         state = getattr(repo, "_current", None) if repo is not None else None
         cognition = getattr(state, "cognition", None) if state is not None else None
         soma = getattr(state, "soma", None) if state is not None else None

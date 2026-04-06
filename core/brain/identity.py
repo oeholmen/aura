@@ -137,49 +137,57 @@ class IdentityService:
             return True
 
         try:
-            from core.executive.executive_core import (
-                ActionType,
-                DecisionOutcome,
-                Intent,
-                IntentSource,
-                get_executive_core,
-            )
+            from core.constitution import get_constitutional_core
 
-            source_map = {
-                "user": IntentSource.USER,
-                "social_reflection": IntentSource.REFLECTION,
-                "creative_synthesis": IntentSource.REFLECTION,
-                "metacognitive_audit": IntentSource.REFLECTION,
-                "swarm_reflection": IntentSource.REFLECTION,
-                "goal_genesis": IntentSource.DRIVE,
-                "agency_goal_formation": IntentSource.DRIVE,
-            }
-            intent = Intent(
-                source=source_map.get(source, IntentSource.SYSTEM),
-                goal=f"{kind}:{str(content)[:80]}",
-                action_type=getattr(ActionType, action_type),
-                payload={"kind": kind, "source": source, "content": str(content)[:500]},
-                priority=max(0.1, min(1.0, float(priority))),
-                requires_memory_commit=True,
-            )
-            record = get_executive_core().request_approval_sync(intent)
-            if record.outcome in (DecisionOutcome.APPROVED, DecisionOutcome.DEGRADED):
+            core = get_constitutional_core()
+            authority_source = {
+                "user": "user",
+                "social_reflection": "reflection",
+                "creative_synthesis": "reflection",
+                "metacognitive_audit": "reflection",
+                "swarm_reflection": "reflection",
+                "goal_genesis": "drive",
+                "agency_goal_formation": "drive",
+            }.get(source, "system")
+            if str(action_type or "").upper() == "WRITE_MEMORY":
+                approved, reason = core.approve_memory_write_sync(
+                    kind,
+                    str(content or ""),
+                    source=authority_source,
+                    importance=max(0.1, min(1.0, float(priority))),
+                    metadata={"kind": kind, "source": source, "action_type": action_type},
+                )
+            else:
+                approved, reason = core.approve_belief_update_sync(
+                    kind,
+                    content,
+                    note=f"identity_source:{source}",
+                    source=authority_source,
+                    importance=max(0.1, min(1.0, float(priority))),
+                )
+            if approved:
                 return True
 
+            event_reason = "identity_write_blocked"
+            if any(
+                marker in str(reason or "")
+                for marker in ("gate_failed", "required", "unavailable")
+            ):
+                event_reason = "identity_write_gate_failed"
             try:
                 from core.health.degraded_events import record_degraded_event
 
                 record_degraded_event(
                     "identity",
-                    "identity_write_blocked",
+                    event_reason,
                     detail=f"{kind}:{source}",
                     severity="warning",
                     classification="background_degraded",
-                    context={"kind": kind, "source": source, "reason": record.reason},
+                    context={"kind": kind, "source": source, "reason": reason},
                 )
             except Exception as exc:
                 logger.debug("Identity degraded-event logging failed: %s", exc)
-            logger.warning("Identity write blocked by ExecutiveCore (%s, source=%s): %s", kind, source, record.reason)
+            logger.warning("Identity write blocked by constitutional gate (%s, source=%s): %s", kind, source, reason)
             return False
         except Exception as exc:
             try:
@@ -283,8 +291,9 @@ class IdentityService:
         
         # Pull generated heuristics
         heuristics_prompt = ""
-        from core.container import ServiceContainer
-        eh = ServiceContainer.get("epistemic_humility", default=None)
+        from core.runtime.service_access import resolve_epistemic_humility
+
+        eh = resolve_epistemic_humility(default=None)
         if eh:
             heuristics_prompt = eh.get_active_heuristics()
         

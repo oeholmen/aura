@@ -10,6 +10,19 @@ from typing import Any, Dict
 
 logger = logging.getLogger("Aura.PluginLoader")
 
+_DANGEROUS_DUNDER_ATTRS = {
+    "__bases__",
+    "__builtins__",
+    "__closure__",
+    "__code__",
+    "__defaults__",
+    "__func__",
+    "__globals__",
+    "__mro__",
+    "__self__",
+    "__subclasses__",
+}
+
 class PluginManager:
     def __init__(self, plugin_dir: str = "plugins"):
         self.plugin_dir = plugin_dir
@@ -41,7 +54,7 @@ class PluginManager:
                         return False
                 # Check for dangerous attributes (e.g., .__subclasses__, .__globals__)
                 if isinstance(node, ast.Attribute):
-                    if node.attr.startswith("__") and node.attr.endswith("__"):
+                    if node.attr in _DANGEROUS_DUNDER_ATTRS:
                         logger.warning("Plugin %s rejected: dunder attribute access %s detected.", file_path, node.attr)
                         return False
                 # Check for dangerous imports

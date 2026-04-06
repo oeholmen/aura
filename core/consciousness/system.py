@@ -5,6 +5,14 @@ import asyncio
 import logging
 from typing import Optional, Any
 from core.container import ServiceContainer
+from core.runtime.service_access import (
+    resolve_attention_schema,
+    resolve_conscious_substrate,
+    resolve_global_workspace,
+    resolve_homeostatic_coupling,
+    resolve_self_prediction,
+    resolve_temporal_binding,
+)
 from .attention_schema import AttentionSchema
 from .global_workspace import GlobalWorkspace
 from .heartbeat import CognitiveHeartbeat
@@ -19,18 +27,19 @@ logger = logging.getLogger("Consciousness")
 class ConsciousnessSystem:
     def __init__(self, orchestrator):
         self.orch = orchestrator
-        self.attention_schema = ServiceContainer.get("attention_schema", default=None) or AttentionSchema()
-        self.global_workspace = ServiceContainer.get("global_workspace", default=None) or GlobalWorkspace(self.attention_schema)
-        self.temporal_binding = ServiceContainer.get("temporal_binding", default=None) or TemporalBindingEngine()
-        self.homeostatic_coupling = ServiceContainer.get("homeostatic_coupling", default=None) or HomeostaticCoupling(orchestrator)
-        self.self_prediction = ServiceContainer.get("self_prediction", default=None) or SelfPredictionLoop(orchestrator)
-        self.liquid_substrate = ServiceContainer.get("conscious_substrate", default=None) or LiquidSubstrate()
+        self.attention_schema = resolve_attention_schema(default=None) or AttentionSchema()
+        self.global_workspace = resolve_global_workspace(default=None) or GlobalWorkspace(self.attention_schema)
+        self.temporal_binding = resolve_temporal_binding(default=None) or TemporalBindingEngine()
+        self.homeostatic_coupling = resolve_homeostatic_coupling(default=None) or HomeostaticCoupling(orchestrator)
+        self.self_prediction = resolve_self_prediction(default=None) or SelfPredictionLoop(orchestrator)
+        self.liquid_substrate = resolve_conscious_substrate(default=None) or LiquidSubstrate()
         self.qualia = ServiceContainer.get("qualia_synthesizer", default=None) or QualiaSynthesizer()
         
         # Initialize attributes to avoid NoneType/AttributeError in IDE
         self._task: Optional[asyncio.Task] = None
         self.phi_core: Optional[Any] = None
         self.closed_loop: Optional[Any] = None
+        self.bridge: Optional[Any] = None  # ConsciousnessBridge (Phase Bridge)
         
         # Aliases
         self.substrate = self.liquid_substrate
@@ -50,6 +59,9 @@ class ConsciousnessSystem:
         ServiceContainer.register_instance("temporal_binding", self.temporal_binding)
         ServiceContainer.register_instance("homeostatic_coupling", self.homeostatic_coupling)
         ServiceContainer.register_instance("self_prediction", self.self_prediction)
+        ServiceContainer.register_instance("conscious_substrate", self.liquid_substrate)
+        ServiceContainer.register_instance("liquid_state", self.liquid_substrate)
+        ServiceContainer.register_instance("qualia_synthesizer", self.qualia)
 
         self.heartbeat = CognitiveHeartbeat(
             orchestrator=orchestrator,
@@ -120,6 +132,19 @@ class ConsciousnessSystem:
         except Exception as e:
             logger.warning("Could not initialize PhiCore: %s", e)
 
+        # Layer 6: Consciousness Bridge — Neural Mesh, Neurochemicals,
+        # Embodied Interoception, Oscillatory Binding, Somatic Gate,
+        # Unified Field, Substrate Evolution
+        try:
+            from .consciousness_bridge import ConsciousnessBridge
+            self.bridge = ConsciousnessBridge(self)
+            await self.bridge.start()
+            ServiceContainer.register_instance("consciousness_bridge", self.bridge)
+            logger.info("🧠 Layer 6: ConsciousnessBridge ONLINE (%d/7 layers)",
+                        self.bridge.get_status().get("layers_active", 0))
+        except Exception as e:
+            logger.warning("Could not boot ConsciousnessBridge: %s", e)
+
         # ═══════════════════════════════════════════════════════════════════
 
         if self.dreaming:
@@ -135,6 +160,13 @@ class ConsciousnessSystem:
             except asyncio.CancelledError as _e:
                 logger.debug("Ignored CancelledError during consciousness system shutdown")
         
+        # Stop the consciousness bridge
+        if self.bridge:
+            try:
+                await self.bridge.stop()
+            except Exception as _e:
+                logger.debug('Ignored Exception stopping bridge: %s', _e)
+
         # Stop the closed loop
         if self.closed_loop:
             try:
@@ -162,5 +194,8 @@ class ConsciousnessSystem:
         if self.closed_loop:
             state["closed_loop"] = self.closed_loop.get_status()
 
-        return copy.deepcopy(state)
+        # Add consciousness bridge status
+        if self.bridge:
+            state["bridge"] = self.bridge.get_status()
 
+        return copy.deepcopy(state)

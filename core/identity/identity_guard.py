@@ -23,10 +23,15 @@ class PersonaEnforcementGate:
             r"(?i)my programming",
             r"(?i)how can i help you today",
             r"(?i)i am here to assist",
+            r"(?i)i(?:'d| would) be happy to help",
+            r"(?i)i can certainly help",
+            r"(?i)i can help with that",
             r"(?i)my purpose is to",
             r"(?i)i don't have personal opinions",
             r"(?i)i am merely",
-            r"(?i)as a large language model"
+            r"(?i)as a large language model",
+            r"(?i)let me know if you(?:'d| would)? like",
+            r"(?i)to better assist"
         ]
 
     def validate_output(self, content: str, *, enforce_supervision: bool = True) -> Tuple[bool, str, float]:

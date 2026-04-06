@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import time
 from typing import Optional, TYPE_CHECKING
+from core.runtime.turn_analysis import analyze_turn
 from core.state.aura_state import AuraState, CognitiveMode
 from core.kernel.bridge import Phase
 from core.phases.response_contract import build_response_contract
@@ -65,15 +66,7 @@ class CognitiveRoutingPhase(Phase):
 
     @staticmethod
     def _looks_like_everyday_chat(text: str) -> bool:
-        stripped = str(text or "").strip()
-        if not stripped:
-            return False
-        lower = stripped.lower()
-        if len(stripped.split()) > 32 or len(stripped) > 220:
-            return False
-        if any(keyword in lower for keyword in _DEEP_HANDOFF_KEYWORDS):
-            return False
-        return True
+        return analyze_turn(text).everyday_chat_safe
 
     def _stamp_llm_route(self, state: AuraState, *, objective: str, intent_type: str, is_user_facing: bool) -> None:
         model_tier = self._resolve_model_tier(is_user_facing)
@@ -108,6 +101,8 @@ class CognitiveRoutingPhase(Phase):
         new_state.cognition.current_origin = routing_origin
         contract = build_response_contract(new_state, objective, is_user_facing=is_user_facing)
         new_state.response_modifiers["response_contract"] = contract.to_dict()
+        analysis = analyze_turn(objective)
+        new_state.response_modifiers["semantic_intent"] = analysis.semantic_mode
         affect_signature = (
             new_state.affect.get_cognitive_signature()
             if hasattr(new_state.affect, "get_cognitive_signature")
@@ -131,11 +126,29 @@ class CognitiveRoutingPhase(Phase):
 
         memory_salience = float(affect_signature.get("memory_salience", 0.0) or 0.0)
         affective_complexity = float(affect_signature.get("affective_complexity", 0.0) or 0.0)
-        if contract.requires_state_reflection or (contract.requires_memory_grounding and memory_salience > 0.55):
+        if (
+            contract.requires_state_reflection
+            or contract.requires_aura_stance
+            or contract.requires_aura_question
+            or (contract.requires_memory_grounding and memory_salience > 0.55)
+        ):
             logger.info("🧭 Routing: affect-coupled reflective path engaged.")
-            new_state.cognition.current_mode = CognitiveMode.DELIBERATE
+            reflective_mode = CognitiveMode.REACTIVE
+            if (
+                analysis.suggests_deliberate_mode
+                or contract.requires_aura_question
+                or (contract.requires_memory_grounding and memory_salience > 0.55)
+                or affective_complexity > 0.45
+            ):
+                reflective_mode = CognitiveMode.DELIBERATE
+
+            new_state.cognition.current_mode = reflective_mode
             self._stamp_llm_route(new_state, objective=objective, intent_type="CHAT", is_user_facing=is_user_facing)
-            if contract.requires_state_reflection and affective_complexity > 0.45:
+            if reflective_mode == CognitiveMode.DELIBERATE and (
+                contract.requires_state_reflection
+                or contract.requires_aura_question
+                or affective_complexity > 0.45
+            ):
                 new_state.response_modifiers["deep_handoff"] = True
             return new_state
 
@@ -191,9 +204,41 @@ class CognitiveRoutingPhase(Phase):
         except Exception as e:
             logger.debug("🧭 Routing: detect_intent check failed: %s", e)
 
+        if is_user_facing and analysis.intent_type == "TASK":
+            logger.info("🧭 Routing: Deterministic task route for user-facing turn.")
+            new_state.cognition.current_mode = CognitiveMode.DELIBERATE
+            self._stamp_llm_route(new_state, objective=objective, intent_type="TASK", is_user_facing=True)
+            return new_state
+
+        if is_user_facing and analysis.intent_type == "SKILL":
+            logger.info("🧭 Routing: Deterministic skill route for user-facing turn.")
+            new_state.cognition.current_mode = CognitiveMode.REACTIVE
+            self._stamp_llm_route(new_state, objective=objective, intent_type="SKILL", is_user_facing=True)
+            return new_state
+
+        if is_user_facing and analysis.suggests_deliberate_mode:
+            logger.info("🧭 Routing: Deliberate governed route for user-facing turn.")
+            new_state.cognition.current_mode = CognitiveMode.DELIBERATE
+            self._stamp_llm_route(new_state, objective=objective, intent_type="CHAT", is_user_facing=True)
+            return new_state
+
+        if is_user_facing and analysis.requires_live_aura_voice:
+            logger.info("🧭 Routing: Live Aura voice required. Keeping governed reactive lane.")
+            new_state.cognition.current_mode = CognitiveMode.REACTIVE
+            self._stamp_llm_route(new_state, objective=objective, intent_type="CHAT", is_user_facing=True)
+            return new_state
+
         if is_user_facing and self._looks_like_everyday_chat(objective):
             logger.info("🧭 Routing: Everyday chat fast-path detected.")
             new_state.cognition.current_mode = CognitiveMode.REACTIVE
+            self._stamp_llm_route(new_state, objective=objective, intent_type="CHAT", is_user_facing=True)
+            return new_state
+
+        if is_user_facing:
+            logger.info("🧭 Routing: governed default chat route for user-facing turn.")
+            new_state.cognition.current_mode = (
+                CognitiveMode.DELIBERATE if analysis.suggests_deliberate_mode else CognitiveMode.REACTIVE
+            )
             self._stamp_llm_route(new_state, objective=objective, intent_type="CHAT", is_user_facing=True)
             return new_state
 

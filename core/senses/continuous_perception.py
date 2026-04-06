@@ -276,11 +276,12 @@ class ContinuousPerceptionEngine:
             try:
                 if not user_facing and constitutional_runtime_live:
                     try:
-                        from core.executive.executive_core import get_executive_core
+                        from core.constitution import get_constitutional_core
 
-                        approved, reason = await get_executive_core().approve_background_task(
-                            "continuous_perception.intent",
+                        approved, reason, _authority_decision = await get_constitutional_core(self.orchestrator).approve_initiative(
+                            f"continuous_perception:{str(text)[:160]}",
                             source=source,
+                            urgency=0.35,
                         )
                     except Exception as exc:
                         record_degraded_event(

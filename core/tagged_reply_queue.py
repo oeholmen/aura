@@ -197,14 +197,6 @@ class TaggedReplyQueue:
         item = self._queue.get_nowait()
         return self._coerce_reply(item).content
 
-    def empty(self) -> bool:
-        self._prune_deferred()
-        return not self._deferred and self._queue.empty()
-
-    def qsize(self) -> int:
-        self._prune_deferred()
-        return self._queue.qsize() + len(self._deferred)
-
     async def get_for_origin(
         self,
         origin: str,
@@ -314,12 +306,14 @@ class TaggedReplyQueue:
             logger.debug("Suppressed Exception: %s", _exc)
 
     def qsize(self) -> int:
+        self._prune_deferred()
         return len(self._deferred) + self._queue.qsize()
 
     def size(self) -> int:
         return self.qsize()
 
     def empty(self) -> bool:
+        self._prune_deferred()
         return not self._deferred and self._queue.empty()
 
     def full(self) -> bool:

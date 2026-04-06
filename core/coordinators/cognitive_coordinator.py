@@ -9,6 +9,9 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
+from core.runtime.governance_policy import allow_direct_user_shortcut
+from core.runtime.turn_analysis import analyze_turn
+
 logger = logging.getLogger(__name__)
 
 
@@ -133,6 +136,9 @@ class CognitiveCoordinator:
         """Identify and execute skills that don't need LLM reasoning."""
         if origin != "user":
             return None
+        if not allow_direct_user_shortcut(origin):
+            logger.info("🧭 Direct skill shortcut yielded to governed tool path for user-facing turn")
+            return None
         msg_lower = message.lower()
         if any(kw in msg_lower for kw in ["search the web", "look up", "google", "find out about"]):
             return await self._execute_direct_search(message)
@@ -209,17 +215,7 @@ class CognitiveCoordinator:
                 return True
         except Exception as _macro_exc:
             import logging; logging.getLogger("Aura.Critical").error("Suppressed Exception: %s", _macro_exc)
-        msg_lower = message.lower()
-        words = set(re.findall(r'\b\w+\b', msg_lower))
-        phrases = ["what's up", "whats up", "how are you", "how's it going", "who are you", "how are things", "you okay", "check status", "question for you", "have a question"]
-        has_phrase = any(p in msg_lower for p in phrases)
-        chat_triggers = {"hey", "hello", "hi", "yo", "sup", "status", "awesome", "dude", "cool", "thanks", "thx", "ok", "okay", "question", "ask", "asking", "answer"}
-        has_trigger = has_phrase or bool(words.intersection(chat_triggers))
-        if len(message) < 150 and has_trigger:
-            commands = ["run", "exec", "search", "browse", "click", "type", "scan", "deploy", "create", "build", "write", "think", "analyze", "evaluate", "open", "fix", "patch"]
-            if not any(cmd in msg_lower for cmd in commands):
-                return True
-        return False
+        return analyze_turn(message).everyday_chat_safe
 
     # ------------------------------------------------------------------
     # Agentic Context & Identity

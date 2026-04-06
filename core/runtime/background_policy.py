@@ -60,28 +60,28 @@ _BACKGROUND_ORIGIN_HINTS = frozenset({
 
 @dataclass(frozen=True)
 class BackgroundPolicyProfile:
-    min_idle_seconds: float = 600.0
-    max_memory_percent: float = 80.0
-    max_failure_pressure: float = 0.15
-    require_conversation_ready: bool = True
+    min_idle_seconds: float = 30.0
+    max_memory_percent: float = 85.0
+    max_failure_pressure: float = 0.25
+    require_conversation_ready: bool = False
 
 
 THOUGHT_BACKGROUND_POLICY = BackgroundPolicyProfile(
-    min_idle_seconds=180.0,
+    min_idle_seconds=30.0,
     max_memory_percent=75.0,
     max_failure_pressure=0.10,
     require_conversation_ready=False,
 )
 
 RESEARCH_BACKGROUND_POLICY = BackgroundPolicyProfile(
-    min_idle_seconds=900.0,
+    min_idle_seconds=90.0,
     max_memory_percent=75.0,
     max_failure_pressure=0.10,
     require_conversation_ready=False,
 )
 
 MAINTENANCE_BACKGROUND_POLICY = BackgroundPolicyProfile(
-    min_idle_seconds=900.0,
+    min_idle_seconds=300.0,
     max_memory_percent=85.0,
     max_failure_pressure=0.20,
     require_conversation_ready=False,
@@ -157,11 +157,11 @@ def background_activity_reason(
         if require_conversation_ready is None:
             require_conversation_ready = profile.require_conversation_ready
 
-    min_idle_seconds = float(min_idle_seconds if min_idle_seconds is not None else 600.0)
-    max_memory_percent = float(max_memory_percent if max_memory_percent is not None else 80.0)
-    max_failure_pressure = float(max_failure_pressure if max_failure_pressure is not None else 0.15)
+    min_idle_seconds = float(min_idle_seconds if min_idle_seconds is not None else 30.0)
+    max_memory_percent = float(max_memory_percent if max_memory_percent is not None else 85.0)
+    max_failure_pressure = float(max_failure_pressure if max_failure_pressure is not None else 0.25)
     require_conversation_ready = bool(
-        True if require_conversation_ready is None else require_conversation_ready
+        False if require_conversation_ready is None else require_conversation_ready
     )
 
     now = time.time()

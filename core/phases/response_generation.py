@@ -58,16 +58,47 @@ class ResponseGenerationPhase(BasePhase):
             logger.debug("⏭️ ResponseGeneration: No active objective, skipping.")
             return state
 
-        # PHASE 7 SUPPRESSION: If Advanced Cognition (CognitiveIntegrationLayer) is handling this, skip legacy phase
+        # PHASE 7 SUPPRESSION: If Advanced Cognition (CognitiveIntegrationLayer) is
+        # handling this, Phase 5 MUST NOT fire. This is not advisory — Phase 7 IS the
+        # response generator for user-facing turns when active. Two generators = two
+        # voices = federation instead of one mind.
         cog = self.container.get("cognitive_integration", default=None)
         if cog and getattr(cog, "is_active", False) and background_policy.is_user_facing_origin(origin):
-            logger.debug("🛡️ ResponseGeneration: Phase 7 is active, suppressing legacy generation for %s origin.", origin)
+            logger.debug("🛡️ ResponseGeneration: Phase 7 active — Phase 5 SUPPRESSED for %s.", origin)
+            return state
+        # Also suppress if Phase 7 is currently mid-processing (race condition guard)
+        if cog and getattr(cog, "_processing_turn", False):
+            logger.debug("🛡️ ResponseGeneration: Phase 7 mid-processing — Phase 5 SUPPRESSED.")
             return state
 
         logger.info("💭 ResponseGeneration: Generating response for objective: %s... (%s)",
                      str(objective)[:30], state.cognition.current_mode.value)
-        
+
         try:
+            # ── SUBSTRATE VOICE: Compile speech profile BEFORE prompt assembly ──
+            # The substrate reads all internal systems and decides HOW Aura will speak.
+            # This must happen before ContextAssembler builds the prompt so the
+            # hard constraint block is available for injection.
+            _sve = None
+            _speech_profile = None
+            try:
+                from core.voice.substrate_voice_engine import get_substrate_voice_engine
+                _sve = get_substrate_voice_engine()
+                _speech_profile = _sve.compile_profile(
+                    state=state,
+                    user_message=str(objective)[:500],
+                    origin=origin,
+                )
+                logger.debug(
+                    "🗣️ [SubstrateVoice] Profile: budget=%d, tone=%s, multi=%s, fu=%.2f",
+                    _speech_profile.word_budget,
+                    _speech_profile.tone_override or "default",
+                    _speech_profile.multi_message,
+                    _speech_profile.followup_probability,
+                )
+            except Exception as _sve_exc:
+                logger.debug("SubstrateVoiceEngine compile skipped: %s", _sve_exc)
+
             is_background = not background_policy.is_user_facing_origin(origin)
             if is_background:
                 try:
@@ -313,11 +344,30 @@ class ResponseGenerationPhase(BasePhase):
             
             # 6. Clean response
             cleaned_response = self._clean_response(cleaned_response, state)
-            
-            # 6. Skip emission for background tasks if they produced no meaningful content
+
+            # 6b. SUBSTRATE VOICE: Shape the response — enforce the profile
+            # The substrate compiled constraints. Now enforce them on the output.
+            _shaped_messages = None
+            if _sve and _speech_profile and cleaned_response:
+                try:
+                    shaped = _sve.shape_response(cleaned_response)
+                    if isinstance(shaped, list):
+                        # Multi-message: use first as primary, queue rest as follow-ups
+                        cleaned_response = shaped[0]
+                        _shaped_messages = shaped[1:]
+                        logger.debug(
+                            "🗣️ [SubstrateVoice] Shaped into %d messages",
+                            len(shaped),
+                        )
+                    else:
+                        cleaned_response = shaped
+                except Exception as _shape_exc:
+                    logger.debug("ResponseShaper failed (using raw): %s", _shape_exc)
+
+            # 6c. Skip emission for background tasks if they produced no meaningful content
             if is_background and not cleaned_response:
                 return state
- 
+
             # 7. Derive new state with the response
             new_state = state.derive("response_generation")
             new_state.cognition.working_memory.append({
@@ -348,6 +398,42 @@ class ResponseGenerationPhase(BasePhase):
                         str(objective), str(cleaned_response), state
                     )
                 )
+
+            # ── SUBSTRATE VOICE: Follow-up decision ──────────────────────
+            # Ask the substrate if a follow-up is warranted. This is organic,
+            # not forced — driven by actual curiosity/engagement/dopamine.
+            if _sve and _speech_profile and not is_background and cleaned_response:
+                try:
+                    history = [
+                        {"role": m.get("role", ""), "content": str(m.get("content", ""))}
+                        for m in (state.cognition.working_memory or [])[-8:]
+                    ]
+                    fu_decision = _sve.decide_followup(
+                        user_message=str(objective),
+                        aura_response=str(cleaned_response),
+                        state=state,
+                        conversation_history=history,
+                    )
+                    if fu_decision.should_followup:
+                        # Store decision in state for the orchestrator to pick up
+                        new_state.response_modifiers["pending_followup"] = {
+                            "type": fu_decision.followup_type,
+                            "delay": fu_decision.delay_seconds,
+                            "word_budget": fu_decision.word_budget,
+                            "context_hint": fu_decision.context_hint,
+                            "reason": fu_decision.reason,
+                        }
+                        logger.info(
+                            "💬 [SubstrateVoice] Follow-up queued: %s in %.1fs",
+                            fu_decision.followup_type,
+                            fu_decision.delay_seconds,
+                        )
+
+                    # Queue additional shaped messages (from multi-message split)
+                    if _shaped_messages:
+                        new_state.response_modifiers["queued_messages"] = _shaped_messages
+                except Exception as _fu_exc:
+                    logger.debug("Follow-up decision failed: %s", _fu_exc)
 
             return new_state
             

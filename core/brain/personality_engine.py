@@ -490,16 +490,10 @@ class PersonalityEngine:
         Uses synthesis layer to scrub robotic leaks and enforce Aura's voice.
         """
         try:
-            # Import synthesis layer for aggressive curing
-            # We use a late import to avoid circular dependencies
-            from ..synthesis import cure_personality_leak
-        except (ImportError, ValueError):
-            # Fallback if synthesis is not in brain/ (check core/)
-            try:
-                from ..synthesis import cure_personality_leak
-            except Exception:
-                # Basic fallback if everything fails
-                return text.replace("AI assistant", "autonomous intelligence").replace("as an assistant", "as your equal partner")
+            from core.synthesis import cure_personality_leak
+        except Exception:
+            # Basic fallback if the synthesis layer is unavailable.
+            return text.replace("AI assistant", "autonomous intelligence").replace("as an assistant", "as your equal partner")
 
         return cure_personality_leak(text)
 

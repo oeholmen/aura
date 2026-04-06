@@ -6,6 +6,7 @@ from . import BasePhase
 from ..state.aura_state import AuraState, CognitiveMode
 from ..cognitive.parallel_thought import ParallelThoughtStream
 from ..consciousness.executive_authority import get_executive_authority
+from core.runtime.turn_analysis import analyze_turn
 from core.utils.queues import decode_stringified_priority_message, role_for_origin
 
 logger = logging.getLogger(__name__)
@@ -136,25 +137,8 @@ class CognitiveRoutingPhase(BasePhase):
             self._last_non_user_fingerprint = fingerprint
             self._last_non_user_route_at = now
         
-        # Short messages are ALWAYS casual — skip LLM classification entirely
-        # This prevents the 72B model from loading for "Hey", "Hi", etc.
-        if len(input_text.strip()) < 15:
-            logger.info("🧭 Routing: Short input (%d chars) — skipping classification, forcing REACTIVE.", len(input_text.strip()))
-            new_state.cognition.current_mode = CognitiveMode.REACTIVE
-            new_state.cognition.current_objective = input_text
-            new_state.cognition.current_origin = routing_origin
-            new_state.response_modifiers["model_tier"] = "tertiary" if is_autonomous else "primary"
-            new_state.response_modifiers["deep_handoff"] = False
-            if not is_autonomous and routing_origin in user_origins:
-                get_executive_authority().record_user_objective(
-                    new_state,
-                    input_text,
-                    source=f"cognitive_routing:{routing_origin}",
-                    mode=str(CognitiveMode.REACTIVE.value),
-                )
-            return new_state
-
         # Fast skill detection before any LLM routing so tool use stays reliable
+        matched_skills: list[str] = []
         try:
             cap = self.container.get("capability_engine", default=None)
             if cap and hasattr(cap, "detect_intent") and routing_origin in user_origins:
@@ -177,43 +161,20 @@ class CognitiveRoutingPhase(BasePhase):
                     return new_state
         except Exception as exc:
             logger.debug("🧭 Routing: detect_intent fast path failed: %s", exc)
-        
-        # 3. Intent Classification via LLM Router
+
+        analysis = analyze_turn(input_text, matched_skills=bool(matched_skills))
         cognitive_mode = CognitiveMode.REACTIVE
-        if is_autonomous:
-            logger.info("🧭 Routing: Autonomous objective detected. Skipping LLM intent classification.")
-        else:
-            try:
-                router = self.container.get("llm_router", default=None)
-                
-                if router and hasattr(router, "classify") and input_text:
-                    intent = await router.classify(
-                        input_text,
-                        prefer_tier="primary",
-                        origin=f"routing_{routing_origin}",
-                        is_background=False,
-                    )
-                    
-                    # Intent length guard: if the LLM returned garbage
-                    # (>30 chars), it's not a valid intent token. Default to casual.
-                    if len(intent) > 30:
-                        logger.warning("🧭 Routing: Intent too long (%d chars) — likely garbage. Defaulting to casual.", len(intent))
-                        intent = "casual"
-                    
-                    logger.info("🧭 CognitiveRouting: Intent classified as '%s'.", intent)
-                    
-                    deliberate_intents = ("technical", "critical", "deep_research", "planning", "coding", "debug", "math", "security", "audit", "philosophical", "emotional")
-                    if any(di in intent.lower() for di in deliberate_intents):
-                        cognitive_mode = CognitiveMode.DELIBERATE
-                else:
-                    # Removed the 200-character threshold.
-                    # Mode is now determined strictly by keyword matches or router classification.
-                    if self._has_deliberate_keywords(input_text):
-                        cognitive_mode = CognitiveMode.DELIBERATE
-                        
-            except Exception as e:
-                logger.debug("CognitiveRouting: Classification failed: %s", e)
-        
+        new_state.response_modifiers["intent_type"] = analysis.intent_type
+        new_state.response_modifiers["semantic_intent"] = analysis.semantic_mode
+        logger.info(
+            "🧭 CognitiveRouting: deterministic intent=%s semantic=%s live_voice=%s",
+            analysis.intent_type,
+            analysis.semantic_mode,
+            analysis.requires_live_aura_voice,
+        )
+        if analysis.intent_type == "TASK" or analysis.suggests_deliberate_mode or self._has_deliberate_keywords(input_text):
+            cognitive_mode = CognitiveMode.DELIBERATE
+
         # Casual Bypass: If autonomous or matches casual keywords, force REACTIVE (32B)
         if is_autonomous or any(kw in lower_input for kw in _CASUAL_KEYWORDS):
             logger.info("🧭 Routing: Casual/Autonomous bypass. Forcing REACTIVE.")
@@ -299,36 +260,82 @@ class CognitiveRoutingPhase(BasePhase):
 
     def _resolve_model_tier(self, state: AuraState, input_text: str, mode: CognitiveMode, is_autonomous: bool) -> str:
         """
-        Determine the LLM tier based on cognitive mode and task type.
-        
+        Determine the LLM tier based on cognitive mode, task type, AND substrate state.
+
         Tier hierarchy:
           PRIMARY   = 32B everyday foreground reasoning
           TERTIARY  = 7B brainstem for background / autonomous work
           EMERGENCY = 1.5B only when everything else is down
-        
+
         The 72B solver is NOT selected here by default. It is only awakened via
         the explicit deep_handoff flag produced below.
         """
         # Autonomous background tasks → brainstem (7B) to save resources
         if is_autonomous:
             return "tertiary"
-        
+
         # All user-facing work starts on the 32B brain by default.
         return "primary"
 
-    @staticmethod
-    def _should_allow_deep_handoff(text: str, mode: CognitiveMode, is_autonomous: bool) -> bool:
-        """Gate the 72B solver behind explicit complexity signals."""
+    def _should_allow_deep_handoff(self, text: str, mode: CognitiveMode, is_autonomous: bool) -> bool:
+        """Gate the 72B solver using SUBSTRATE STATE, not just keywords.
+
+        The substrate decides whether a thought is complex enough for the
+        deep solver. High unified field coherence + high phi = the system
+        is integrated and can handle complexity. Low coherence = fragmented,
+        stay reactive. High free energy = high surprise, needs deep processing.
+
+        Keywords are kept as a fallback but the substrate is the primary signal.
+        """
         if is_autonomous or mode != CognitiveMode.DELIBERATE:
             return False
 
+        # ── Substrate-driven handoff decision ─────────────────────────
+        substrate_score = 0.0
+        try:
+            from core.voice.substrate_voice_engine import _extract_unified_field, _extract_neurochemicals
+            uf = _extract_unified_field()
+            nc = _extract_neurochemicals()
+
+            coherence = uf.get("coherence", 0.7)
+            phi = uf.get("phi", 0.5)
+            field_complexity = uf.get("field_complexity", 0.5)
+            acetylcholine = nc.get("acetylcholine", 0.5)
+            norepinephrine = nc.get("norepinephrine", 0.5)
+
+            # High coherence = system is integrated, CAN go deep
+            if coherence > 0.6:
+                substrate_score += 0.25
+            # High phi = genuine integrated information, complex thought warranted
+            if phi > 0.3:
+                substrate_score += 0.2
+            # High field complexity = rich internal state, deep processing natural
+            if field_complexity > 0.6:
+                substrate_score += 0.15
+            # High acetylcholine = sharp attention, ready for focused work
+            if acetylcholine > 0.6:
+                substrate_score += 0.15
+            # High norepinephrine = alert, can handle demanding task
+            if norepinephrine > 0.5:
+                substrate_score += 0.1
+
+            if substrate_score >= 0.4:
+                logger.info(
+                    "🧠 CognitiveRouting: SUBSTRATE approves deep handoff (score=%.2f, "
+                    "coherence=%.2f, phi=%.2f, complexity=%.2f)",
+                    substrate_score, coherence, phi, field_complexity,
+                )
+                return True
+
+        except Exception as exc:
+            logger.debug("Substrate routing check failed, falling back to keywords: %s", exc)
+
+        # ── Keyword fallback (still useful for explicit requests) ──────
         lower = text.lower()
         word_count = len(text.split())
         if word_count >= 120 or len(text) >= 900:
             return True
-
         return any(keyword in lower for keyword in _DEEP_HANDOFF_KEYWORDS)
-
 
     @staticmethod
     def _has_deliberate_keywords(text: str) -> bool:

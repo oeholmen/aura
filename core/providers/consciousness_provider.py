@@ -3,6 +3,11 @@
 
 import logging
 from core.container import ServiceLifetime
+from core.runtime.service_access import (
+    optional_service,
+    resolve_epistemic_state,
+    resolve_orchestrator,
+)
 
 logger = logging.getLogger("Aura.Providers.Consciousness")
 
@@ -38,7 +43,7 @@ def register_consciousness_services(container):
     # Curiosity Engine
     def create_curiosity():
         from core.curiosity_engine import CuriosityEngine
-        orch = container.get("orchestrator", None)
+        orch = resolve_orchestrator(default=None)
         return CuriosityEngine(orch)
     container.register('curiosity_engine', create_curiosity, lifetime=ServiceLifetime.SINGLETON, required=True)
 
@@ -62,9 +67,8 @@ def register_consciousness_services(container):
 
     def create_executive_authority():
         from core.consciousness.executive_authority import ExecutiveAuthority
-        from core.container import ServiceContainer
 
-        return ExecutiveAuthority(orchestrator=ServiceContainer.get("orchestrator", default=None))
+        return ExecutiveAuthority(orchestrator=resolve_orchestrator(default=None))
     container.register('executive_authority', create_executive_authority, lifetime=ServiceLifetime.SINGLETON, required=False)
 
     def create_executive_closure():
@@ -143,7 +147,7 @@ def register_consciousness_services(container):
     # 53. Theory of Mind
     def create_theory_of_mind():
         from core.consciousness.theory_of_mind import get_theory_of_mind
-        brain = container.get("cognitive_engine", default=None)
+        brain = optional_service("cognitive_engine", default=None)
         return get_theory_of_mind(brain)
     container.register('theory_of_mind', create_theory_of_mind, lifetime=ServiceLifetime.SINGLETON, required=False)
 
@@ -156,6 +160,6 @@ def register_consciousness_services(container):
     # 55. Predictive Engine
     def create_predictive_engine():
         from core.consciousness.predictive_engine import PredictiveEngine
-        world_model = container.get("epistemic_state", default=None)
+        world_model = resolve_epistemic_state(default=None)
         return PredictiveEngine(world_model=world_model)
     container.register('predictive_engine', create_predictive_engine, lifetime=ServiceLifetime.SINGLETON, required=False)

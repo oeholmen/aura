@@ -183,3 +183,24 @@ def get_identity_system(orchestrator=None):
 
 # IdentityCore is now the primary class definition.
 IdentitySystem = IdentityCore
+
+
+class _IdentityManagerProxy:
+    """Lazy compatibility proxy for older imports expecting `identity_manager`."""
+
+    def __getattr__(self, name):
+        return getattr(get_identity_system(), name)
+
+    def __repr__(self) -> str:
+        return repr(get_identity_system())
+
+
+identity_manager = _IdentityManagerProxy()
+
+__all__ = [
+    "IdentityCore",
+    "IdentitySystem",
+    "PersonaEnforcementGate",
+    "get_identity_system",
+    "identity_manager",
+]

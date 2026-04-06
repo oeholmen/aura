@@ -12,6 +12,7 @@ are wrong and autonomously adjust your own operating parameters to compensate.
 """
 
 import asyncio
+from collections import Counter
 import json
 import logging
 import time
@@ -117,12 +118,8 @@ class EpistemicHumility:
 
     async def _synthesize_heuristic(self, failures: List[FailureEvent]):
         """Uses the CognitiveEngine to derive a rule from failures."""
-        if not self.orchestrator: return
-        
-        cognition = getattr(self.orchestrator, 'cognition', None)
-        if hasattr(cognition, 'process_internal_thought'):
-            # This is a bit of a hacky bypass if process_internal_thought exists
-            pass
+        if not self.orchestrator:
+            return
         
         # Build prompt
         failure_log = "\n".join([f"- [{f.source}] {f.error_msg} (Context: {f.context})" for f in failures])
@@ -149,9 +146,7 @@ class EpistemicHumility:
             
             rule = response.content.strip()
             if rule and rule != "NO_PATTERN":
-                # Extract primary domain from the most frequent source
-                sources = [f.source for f in failures]
-                domain = max(set(sources), key=sources.count)
+                domain = self._select_domain(failures)
 
                 heuristic = LearnedHeuristic(domain=domain, rule=rule)
                 self.heuristics[domain] = heuristic
@@ -171,6 +166,20 @@ class EpistemicHumility:
                 
         except Exception as e:
             logger.error(f"Failed to synthesize heuristic: {e}")
+
+    def _select_domain(self, failures: List[FailureEvent]) -> str:
+        sources = [f.source for f in failures if f.source]
+        if not sources:
+            return "general"
+
+        counts = Counter(sources)
+        top_count = max(counts.values())
+        tied_sources = {source for source, count in counts.items() if count == top_count}
+
+        for failure in reversed(failures):
+            if failure.source in tied_sources:
+                return failure.source
+        return sources[-1]
 
     def get_active_heuristics(self) -> str:
         """Returns the formatted heuristics to be injected into the main prompt."""

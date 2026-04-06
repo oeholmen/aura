@@ -16,6 +16,8 @@ import time
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
+from core.runtime.service_access import resolve_inquiry_engine, resolve_narrative_thread
+
 logger = logging.getLogger("Aura.ConversationReflector")
 
 @dataclass
@@ -34,14 +36,13 @@ class ConversationReflector:
         self._last_reflection = 0.0
 
     async def start(self):
-        from core.container import ServiceContainer
-        self._inquiry_engine = ServiceContainer.get("inquiry_engine", default=None)
-        self._narrative = ServiceContainer.get("narrative_thread", default=None)
+        self._inquiry_engine = resolve_inquiry_engine(default=None)
+        self._narrative = resolve_narrative_thread(default=None)
         logger.info("✅ ConversationReflector ONLINE.")
 
     async def reflect_on_history(self, history: List[Dict[str, str]]):
         """Analyze conversation history for gaps and themes."""
-        if not history or time.time() - self._last_reflection < 300: # 5 min cooldown
+        if not history or time.time() - self._last_reflection < 60:
             return
 
         self._last_reflection = time.time()

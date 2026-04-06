@@ -29,6 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.container import ServiceContainer
 from core.executive.executive_ledger import ExecutiveLedger
+from core.runtime.service_access import resolve_canonical_self, resolve_canonical_self_engine, resolve_state_repository
 from core.state.aura_state import _is_speculative_autonomy_label, _normalize_goal_text
 
 logger = logging.getLogger("Aura.Executive")
@@ -714,7 +715,7 @@ class ExecutiveCore:
     async def _check_identity(self, intent: Intent) -> bool:
         """Check if intent is consistent with identity."""
         try:
-            self_engine = ServiceContainer.get("canonical_self_engine", default=None)
+            self_engine = resolve_canonical_self_engine(default=None, autocreate=False)
             if self_engine and hasattr(self_engine, "assert_identity"):
                 return self_engine.assert_identity(intent.goal)
         except Exception as _exc:
@@ -723,7 +724,7 @@ class ExecutiveCore:
 
     def _check_identity_sync(self, intent: Intent) -> bool:
         try:
-            self_engine = ServiceContainer.get("canonical_self_engine", default=None)
+            self_engine = resolve_canonical_self_engine(default=None, autocreate=False)
             if self_engine and hasattr(self_engine, "assert_identity"):
                 return bool(self_engine.assert_identity(intent.goal))
         except Exception as _exc:
@@ -742,9 +743,9 @@ class ExecutiveCore:
 
     def _identity_integrity_available(self) -> bool:
         try:
-            if ServiceContainer.get("canonical_self_engine", default=None) is not None:
+            if resolve_canonical_self_engine(default=None, autocreate=False) is not None:
                 return True
-            if ServiceContainer.get("canonical_self", default=None) is not None:
+            if resolve_canonical_self(default=None, autocreate=False) is not None:
                 return True
             if ServiceContainer.get("self_model", default=None) is not None:
                 return True
@@ -760,7 +761,7 @@ class ExecutiveCore:
         commitments: List[str] = []
         anchor = "none"
         try:
-            repo = ServiceContainer.get("state_repository", default=None)
+            repo = resolve_state_repository(default=None)
             state = getattr(repo, "_current", None) if repo is not None else None
             cognition = getattr(state, "cognition", None) if state is not None else None
             current_objective = str(getattr(cognition, "current_objective", "") or "")
@@ -843,7 +844,7 @@ class ExecutiveCore:
         distress = 0.0
         identity_mismatch = False
         try:
-            repo = ServiceContainer.get("state_repository", default=None)
+            repo = resolve_state_repository(default=None)
             state = getattr(repo, "_current", None) if repo is not None else None
             cognition = getattr(state, "cognition", None) if state is not None else None
             soma = getattr(state, "soma", None) if state is not None else None
@@ -892,7 +893,7 @@ class ExecutiveCore:
 
     def _record_failure_obligation(self, reason: str, intent: Intent) -> None:
         try:
-            repo = ServiceContainer.get("state_repository", default=None)
+            repo = resolve_state_repository(default=None)
             state = getattr(repo, "_current", None) if repo is not None else None
             cognition = getattr(state, "cognition", None) if state is not None else None
             if cognition is not None:

@@ -19,6 +19,9 @@ def test_launcher_exposes_desktop_window_action_and_dock_presence():
     assert "let progress = snapshot.launcherReady ? 100.0 : snapshot.progress" in swift
     assert "bootMarkerIsStaleWithoutRuntime" in swift
     assert 'lockDirectory.appendingPathComponent("orchestrator.lock")' in swift
+    assert "normalizedDirectCLIArguments" in swift
+    assert 'case "--open-gui-window":' in swift
+    assert 'return "--gui-window"' in swift
     assert 'auraMainScript = auraRoot.appendingPathComponent("aura_main.py")' in swift
     assert '["-u", auraMainScript.path, "--desktop"]' in swift
     assert "requiresProtectedFolderFallback" in swift

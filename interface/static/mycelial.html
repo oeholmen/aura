@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AURA // ZENITH SOUL MAP</title>
-    <script src="https://unpkg.com/three"></script>
-    <script src="https://unpkg.com/3d-force-graph"></script>
+    <script src="https://unpkg.com/three@0.160.1/build/three.min.js"></script>
+    <script src="https://unpkg.com/3d-force-graph@1.76.0/dist/3d-force-graph.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@800&display=swap" rel="stylesheet">
     <style>
         body { margin: 0; background-color: #030005; overflow: hidden; font-family: 'Space Mono', monospace; }
@@ -87,6 +87,21 @@
             animation: pulse 2s infinite;
         }
 
+        .fallback-connectome {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(255,255,255,0.55);
+            font-size: 12px;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            background:
+                radial-gradient(circle at center, rgba(138,43,226,0.18), transparent 45%),
+                linear-gradient(135deg, rgba(0,229,255,0.06), transparent 40%, rgba(255,0,255,0.06));
+        }
+
         @keyframes pulse {
             0% { opacity: 0.3; }
             50% { opacity: 1; text-shadow: 0 0 30px #8a2be2; }
@@ -162,11 +177,11 @@
         <div class="zenith-tag">Aura Zenith v2026.3.1-Zenith</div>
         
         <div class="telemetry-block">
-            <div class="telemetry-row"><span class="telemetry-label">AGENCY</span><span class="telemetry-value telemetry-highlight">72</span></div>
-            <div class="telemetry-row"><span class="telemetry-label">CURIOSITY</span><span class="telemetry-value">0%</span></div>
-            <div class="telemetry-row"><span class="telemetry-label">AUTONOMY</span><span class="telemetry-value telemetry-highlight">ON</span></div>
-            <div class="telemetry-row"><span class="telemetry-label">STEALTH</span><span class="telemetry-value">ON</span></div>
-            <div class="telemetry-row"><span class="telemetry-label">SUBCONSCIOUS</span><span class="telemetry-value">IDLE</span></div>
+            <div class="telemetry-row"><span class="telemetry-label">AGENCY</span><span class="telemetry-value telemetry-highlight" id="hud-agency">0%</span></div>
+            <div class="telemetry-row"><span class="telemetry-label">CURIOSITY</span><span class="telemetry-value" id="hud-curiosity">0%</span></div>
+            <div class="telemetry-row"><span class="telemetry-label">AUTONOMY</span><span class="telemetry-value telemetry-highlight" id="hud-autonomy">OFF</span></div>
+            <div class="telemetry-row"><span class="telemetry-label">STEALTH</span><span class="telemetry-value" id="hud-stealth">OFF</span></div>
+            <div class="telemetry-row"><span class="telemetry-label">SUBCONSCIOUS</span><span class="telemetry-value" id="hud-subconscious">IDLE</span></div>
             <div class="telemetry-row"><span class="telemetry-label">RAM</span><span class="telemetry-value" id="hud-ram">0.0%</span></div>
         </div>
     </div>
@@ -176,6 +191,7 @@
     <div class="stats-hud">
         <div class="stat-row"><span class="stat-label">NODES</span><span id="stat-nodes" class="stat-value">0</span></div>
         <div class="stat-row"><span class="stat-label">HYPHAE</span><span id="stat-edges" class="stat-value">0</span></div>
+        <div class="stat-row"><span class="stat-label">PATHWAYS</span><span id="stat-pathways" class="stat-value">0</span></div>
         <div class="stat-row"><span class="stat-label">COHESION</span><span id="stat-cohesion" class="stat-value">0.00</span></div>
         <div class="stat-row"><span class="stat-label">LATENCY</span><span id="stat-latency" class="stat-value">0ms</span></div>
     </div>
@@ -184,9 +200,41 @@
 
     <script>
         const elem = document.getElementById('graph');
-        const Graph = ForceGraph3D()(elem)
-            .backgroundColor('#030005')
-            .nodeLabel(node => {
+        let Graph = null;
+
+        function formatPercentish(value) {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) return '0%';
+            const scaled = Math.abs(numeric) <= 1 ? numeric * 100 : numeric;
+            return `${Math.max(0, Math.min(100, scaled)).toFixed(1)}%`;
+        }
+
+        function setText(id, value) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value;
+        }
+
+        function updateOverlayFromHealth(health) {
+            if (!health || typeof health !== 'object') return;
+            const cortex = health.cortex || {};
+            setText('hud-agency', formatPercentish(cortex.agency));
+            setText('hud-curiosity', formatPercentish(cortex.curiosity));
+            setText('hud-autonomy', cortex.autonomy ? 'ON' : 'OFF');
+            setText('hud-stealth', cortex.stealth ? 'ON' : 'OFF');
+            setText('hud-subconscious', String(cortex.subconscious || 'IDLE').toUpperCase());
+            if (health.ram_usage !== undefined) {
+                setText('hud-ram', `${Number(health.ram_usage).toFixed(1)}%`);
+            }
+        }
+
+        function createGraphInstance() {
+            if (typeof THREE === 'undefined' || typeof ForceGraph3D !== 'function') {
+                throw new Error('Graph libraries unavailable');
+            }
+
+            const graph = ForceGraph3D()(elem)
+                .backgroundColor('#030005')
+                .nodeLabel(node => {
                 const confPercent = Math.round((node.confidence || 0) * 100);
                 const color = node.color || '#8a2be2';
                 return `
@@ -216,17 +264,17 @@
                         <div class="progress-fill" style="width: ${confPercent}%; background: ${color}"></div>
                     </div>
                 </div>`;
-            })
-            .nodeColor(node => node.color || '#4a4a4a')
-            .nodeRelSize(4)
-            .nodeVal(node => {
+                })
+                .nodeColor(node => node.color || '#4a4a4a')
+                .nodeRelSize(4)
+                .nodeVal(node => {
                 let base = (node.confidence || 0.5) * 6;
                 if (node.centrality) base += (node.centrality * 1.5);
                 if (node.is_critical) base *= 2.5; 
                 return base;
-            })
-            .nodeResolution(32)
-            .nodeThreeObject(node => {
+                })
+                .nodeResolution(32)
+                .nodeThreeObject(node => {
                 const color = node.color || '#8a2be2';
                 let size = (node.confidence || 0.5) * 6;
                 if (node.centrality) size += (node.centrality * 1.5);
@@ -256,62 +304,97 @@
                 sphere.add(glow);
 
                 return sphere;
-            })
-            // Edges: Use data-driven colors and thickness
-            .linkColor(link => link.color || 'rgba(0, 229, 255, 0.4)') 
-            .linkWidth(link => (link.strength || 1.0) * 1.5) 
-            .linkDirectionalParticles(2)
-            .linkDirectionalParticleSpeed(0.003)
-            .linkDirectionalParticleWidth(2.0)
-            .linkDirectionalParticleColor(() => '#ff00ff')
-            .onNodeClick(node => {
+                })
+                // Edges: Use data-driven colors and thickness
+                .linkColor(link => link.color || 'rgba(0, 229, 255, 0.4)') 
+                .linkWidth(link => (link.strength || 1.0) * 1.5) 
+                .linkDirectionalParticles(2)
+                .linkDirectionalParticleSpeed(0.003)
+                .linkDirectionalParticleWidth(2.0)
+                .linkDirectionalParticleColor(() => '#ff00ff')
+                .onNodeClick(node => {
                 const distance = 60;
                 const distRatio = 1 + distance/Math.hypot(node.x, node.y, node.z);
-                Graph.cameraPosition(
+                graph.cameraPosition(
                     { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
                     node, 
                     2000 
                 );
             });
 
-        // Add soft ambient light for the Phong material
-        const ambientLight = new THREE.AmbientLight(0x404040, 2);
-        Graph.scene().add(ambientLight);
-        const pointLight = new THREE.PointLight(0xffffff, 1);
-        Graph.scene().add(pointLight);
+            // Add soft ambient light for the Phong material
+            const ambientLight = new THREE.AmbientLight(0x404040, 2);
+            graph.scene().add(ambientLight);
+            const pointLight = new THREE.PointLight(0xffffff, 1);
+            graph.scene().add(pointLight);
+            return graph;
+        }
+
+        function initGraph() {
+            try {
+                Graph = createGraphInstance();
+                return true;
+            } catch (err) {
+                console.error('SOUL_MAP_GRAPH_INIT_FAILED', err);
+                elem.innerHTML = '<div class="fallback-connectome">TELEMETRY MODE ACTIVE</div>';
+                return false;
+            }
+        }
 
         async function initData() {
             const start = Date.now();
             try {
-                const res = await fetch('/api/mycelial/graph');
-                const data = await res.json();
+                const [graphResult, healthResult] = await Promise.allSettled([
+                    fetch('/api/mycelial/graph'),
+                    fetch('/api/health'),
+                ]);
+
+                if (graphResult.status !== 'fulfilled') {
+                    throw graphResult.reason;
+                }
+
+                const data = await graphResult.value.json();
+                let health = {};
+                if (healthResult.status === 'fulfilled') {
+                    try {
+                        health = await healthResult.value.json();
+                    } catch (err) {
+                        console.warn('SOUL_MAP_HEALTH_PARSE_FAILED', err);
+                    }
+                } else {
+                    console.warn('SOUL_MAP_HEALTH_FETCH_FAILED', healthResult.reason);
+                }
+                const linksData = data.links || data.edges || [];
+
+                document.getElementById('stat-nodes').textContent = (data.nodes || []).length;
+                document.getElementById('stat-edges').textContent = linksData.length;
+                document.getElementById('stat-pathways').textContent = data.pathway_count || 0;
+                document.getElementById('stat-cohesion').textContent = (data.system_cohesion || data.cohesion || 0).toFixed(2);
+                document.getElementById('stat-latency').textContent = (Date.now() - start) + 'ms';
+                updateOverlayFromHealth(health);
+                if (data.ram_usage !== undefined) {
+                    setText('hud-ram', `${Number(data.ram_usage).toFixed(1)}%`);
+                }
                 
                 if (data.nodes && data.nodes.length > 0) {
-                    const isFirstLoad = !Graph.graphData().nodes.length;
-                    const linksData = data.links || data.edges || [];
-                    
-                    Graph.graphData({
-                        nodes: data.nodes,
-                        links: linksData.map(e => ({
-                            ...e,
-                            source: e.source || e.from,
-                            target: e.target || e.to
-                        }))
-                    });
-                    
-                    if (isFirstLoad) {
-                        setTimeout(() => { Graph.zoomToFit(1500, 200); }, 800);
-                    }
-                    
-                    document.getElementById('stat-nodes').textContent = data.nodes.length;
-                    document.getElementById('stat-edges').textContent = linksData.length;
-                    document.getElementById('stat-cohesion').textContent = (data.system_cohesion || data.cohesion || 0).toFixed(2);
-                    document.getElementById('stat-latency').textContent = (Date.now() - start) + 'ms';
-                    document.getElementById('loading').style.display = 'none';
+                    if (Graph) {
+                        const currentData = Graph.graphData();
+                        const isFirstLoad = !currentData.nodes.length;
 
-                    if (data.ram_usage !== undefined) {
-                        document.getElementById('hud-ram').textContent = data.ram_usage.toFixed(1) + '%';
+                        Graph.graphData({
+                            nodes: data.nodes,
+                            links: linksData.map(e => ({
+                                ...e,
+                                source: e.source || e.from,
+                                target: e.target || e.to
+                            }))
+                        });
+
+                        if (isFirstLoad) {
+                            setTimeout(() => { Graph.zoomToFit(1500, 200); }, 800);
+                        }
                     }
+                    document.getElementById('loading').style.display = 'none';
                 } else {
                     document.getElementById('loading').textContent = 'SOUL STATE: TRANSCENDENTAL (IDLE)';
                     document.getElementById('loading').style.display = 'block';
@@ -322,12 +405,15 @@
             }
         }
 
+        initGraph();
         initData();
         setInterval(initData, 20000);
 
         window.addEventListener('resize', () => {
-            Graph.width(window.innerWidth);
-            Graph.height(window.innerHeight);
+            if (Graph) {
+                Graph.width(window.innerWidth);
+                Graph.height(window.innerHeight);
+            }
         });
     </script>
 </body>

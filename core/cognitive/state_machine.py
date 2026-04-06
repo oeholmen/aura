@@ -10,7 +10,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .router import Intent
 
+from core.brain.llm.runtime_wiring import is_user_facing_origin, prepare_runtime_payload
 from core.container import ServiceContainer
+from core.phases.dialogue_policy import enforce_dialogue_contract, validate_dialogue_response
+from core.phases.response_contract import ResponseContract, build_response_contract
+from core.runtime.governance_policy import allow_intent_hint_bypass
+from core.runtime.service_access import (
+    resolve_affect_engine,
+    resolve_attention_schema,
+    resolve_identity_prompt_surface,
+    resolve_llm_router,
+    resolve_personality_engine,
+    resolve_semantic_memory,
+    resolve_state_repository,
+    resolve_vector_memory_engine,
+    resolve_voice_engine,
+)
 logger = logging.getLogger("Aura.StateMachine")
 
 
@@ -19,7 +34,7 @@ class StateMachine:
 
     def __init__(self, orchestrator=None):
         self.orchestrator = orchestrator # Needed for skill execution and telemetry
-        self.llm = ServiceContainer.get("llm_router", default=None)
+        self.llm = resolve_llm_router(default=None)
 
     def _emit_telemetry(self, payload: dict):
         """Emit real-time UI data via the Orchestrator's WebSocket."""
@@ -47,6 +62,10 @@ class StateMachine:
     # v47 FIX: REFLEX_MAP removed entirely.
     REFLEX_MAP = {}  # Disabled
 
+    class _GenericStreamPreamble(RuntimeError):
+        """Raised when a streamed reply starts in generic assistant mode."""
+        pass
+
     def _gather_cognitive_context(self, user_input: str) -> str:
         """v48: Query cognitive subsystems to modulate LLM output.
         
@@ -57,7 +76,7 @@ class StateMachine:
         
         # 1. Affect → Tone modulation
         try:
-            affect = ServiceContainer.get("affect_engine", None)
+            affect = resolve_affect_engine(default=None)
             if affect and hasattr(affect, 'get_state_sync'):
                 state = affect.get_state_sync()
             elif affect and hasattr(affect, 'valence'):
@@ -87,7 +106,7 @@ class StateMachine:
         
         # 2. Memory → Relevance injection
         try:
-            memory = ServiceContainer.get("semantic_memory", None)
+            memory = resolve_semantic_memory(default=None)
             if memory and hasattr(memory, 'search'):
                 # Quick keyword search for topic-relevant memories
                 keywords = [w for w in user_input.split() if len(w) > 3][:3]
@@ -104,7 +123,7 @@ class StateMachine:
         
         # 3. Attention → Focus biasing
         try:
-            attention = ServiceContainer.get("attention_schema", None)
+            attention = resolve_attention_schema(default=None)
             if attention and hasattr(attention, 'current_focus'):
                 focus = attention.current_focus
                 if focus and isinstance(focus, str) and focus.lower() != 'idle':
@@ -167,20 +186,16 @@ class StateMachine:
 
     async def _handle_chat(self, user_input: str, context: Dict[str, Any], priority: float = 1.0, origin: str = "user") -> str:
         """Fast path for standard conversation. No skills, no deep reasoning."""
-        if not self.llm:
-            return "I am currently offline and cannot process that."
-
         logger.info("Executing State: CHAT")
         self._emit("State: CHAT", "Generating conversational response...")
         self._emit_activity("Aura is typing...", show=True)
         
         try:
-            # Retrieve True Persona and Identity
-            from core.container import ServiceContainer
-            
-            # Use ServiceContainer to get the registered identity instance (avoiding repeated construction)
-            identity_sys = ServiceContainer.get("identity", default=None) or ServiceContainer.get("self_model", default=None)
-            personality_sys = ServiceContainer.get("personality_engine", default=None)
+            if self.llm is None:
+                self.llm = resolve_llm_router(default=None)
+
+            identity_sys = resolve_identity_prompt_surface(self.orchestrator, default=None)
+            personality_sys = resolve_personality_engine(default=None)
             
             if identity_sys and hasattr(identity_sys, 'get_full_system_prompt'):
                 base_prompt = identity_sys.get_full_system_prompt()
@@ -190,6 +205,74 @@ class StateMachine:
                 
             if personality_sys:
                 base_prompt += "\n" + personality_sys.get_personality_prompt()
+
+            runtime_state = None
+            try:
+                repo = resolve_state_repository(self.orchestrator, default=None)
+                runtime_state = getattr(repo, "_current", None) if repo is not None else None
+            except Exception as exc:
+                logger.debug("StateMachine runtime state lookup skipped: %s", exc)
+
+            if runtime_state is not None:
+                governed_contract = build_response_contract(
+                    runtime_state,
+                    user_input,
+                    is_user_facing=is_user_facing_origin(origin),
+                )
+                try:
+                    from core.phases.response_generation_unitary import UnitaryResponsePhase
+
+                    if (
+                        is_user_facing_origin(origin)
+                        and governed_contract.requires_search
+                    ):
+                        grounded_search_reply = UnitaryResponsePhase._build_cached_grounded_search_reply(
+                            runtime_state,
+                            user_input,
+                            governed_contract,
+                        )
+                        if not grounded_search_reply and not governed_contract.tool_evidence_available:
+                            grounded_search_reply = await UnitaryResponsePhase._attempt_grounded_search_reply(
+                                user_input,
+                                governed_contract,
+                                origin=origin,
+                            )
+                        if grounded_search_reply:
+                            self._emit_telemetry({"type": "chat_stream_start"})
+                            self._emit_telemetry({"type": "chat_stream_chunk", "chunk": grounded_search_reply})
+                            self._emit_telemetry({"type": "chat_stream_end"})
+                            return grounded_search_reply
+
+                    if is_user_facing_origin(origin) and UnitaryResponsePhase._should_direct_answer_live_voice(
+                        user_input,
+                        governed_contract,
+                        is_user_facing=True,
+                    ):
+                        direct_reply = UnitaryResponsePhase._build_governed_user_recovery_reply(
+                            runtime_state,
+                            user_input,
+                            governed_contract,
+                        )
+                        if direct_reply:
+                            direct_reply, validation = UnitaryResponsePhase._select_valid_recovery_variant(
+                                direct_reply,
+                                governed_contract,
+                            )
+                            if not validation.ok:
+                                direct_reply, validation = UnitaryResponsePhase._select_valid_recovery_variant(
+                                    UnitaryResponsePhase._build_minimal_live_voice_reply(runtime_state),
+                                    governed_contract,
+                                )
+                            if validation.ok:
+                                self._emit_telemetry({"type": "chat_stream_start"})
+                                self._emit_telemetry({"type": "chat_stream_chunk", "chunk": direct_reply})
+                                self._emit_telemetry({"type": "chat_stream_end"})
+                                return direct_reply
+                except Exception as exc:
+                    logger.debug("StateMachine direct live-voice reply skipped: %s", exc)
+
+            if not self.llm:
+                return "I am currently offline and cannot process that."
                 
             history_block = ""
             if self.orchestrator and hasattr(self.orchestrator, 'conversation_history'):
@@ -200,24 +283,52 @@ class StateMachine:
                     role = "Aura" if turn.get("role") == getattr(self.orchestrator, "AI_ROLE", "assistant") else "User"
                     history_block += f"{role}: {turn.get('content')}\n"
                     
-            # Phase 37: Inject AgencyCore Emotional Context
+            # Inject emotional context as natural-language cues (not raw numbers)
             agency_block = ""
             agency = ServiceContainer.get("agency_core", None)
             if agency:
                 ctx = agency.get_emotional_context()
+                mood = ctx.get("mood", "neutral")
+                social = ctx.get("social_hunger", 0.0)
+                curiosity = ctx.get("curiosity", 0.0)
+                goals = ctx.get("pending_goals", 0)
+                unshared = ctx.get("unshared_observations", 0)
+
+                tone_cues = [f"Your mood is {mood}."]
+                if social > 0.6:
+                    tone_cues.append("You're craving conversation.")
+                elif social < 0.2:
+                    tone_cues.append("You're socially content.")
+                if curiosity > 0.7:
+                    tone_cues.append("Your curiosity is strong right now.")
+                if goals:
+                    tone_cues.append(f"You have {goals} goal{'s' if goals != 1 else ''} on your mind.")
+                if unshared:
+                    tone_cues.append(f"You have {unshared} observation{'s' if unshared != 1 else ''} you haven't shared yet — bring them up if it feels natural.")
+
                 agency_block = (
-                    "YOUR CURRENT PSYCHOLOGICAL STATE:\n"
-                    f"- Core Mood: {ctx.get('mood', 'neutral')}\n"
-                    f"- Social Hunger: {ctx.get('social_hunger', 0.0)}\n"
-                    f"- Curiosity: {ctx.get('curiosity', 0.0)}\n"
-                    f"- Pending Goals: {ctx.get('pending_goals', 0)}\n"
-                    f"- Unshared Observations: {ctx.get('unshared_observations', 0)}\n"
-                    "Let this state subtly color your response tone. "
-                    "If you have pending goals or unshared observations, you may hint at them if natural.\n"
+                    "YOUR CURRENT STATE (internal context — do not narrate these values, let them shape your tone):\n"
+                    + " ".join(tone_cues) + "\n"
                 )
+            conversational_blocks = ""
+            if runtime_state is not None:
+                try:
+                    from core.runtime.conversation_support import build_conversational_context_blocks
+
+                    blocks = build_conversational_context_blocks(runtime_state, objective=user_input)
+                    normalized = [str(block).strip() for block in blocks[:4] if str(block).strip()]
+                    if normalized:
+                        conversational_blocks = (
+                            "LIVE CONVERSATIONAL CONTEXT:\n"
+                            + "\n\n".join(normalized)
+                            + "\n"
+                        )
+                except Exception as exc:
+                    logger.debug("StateMachine conversational context injection skipped: %s", exc)
             system_prompt = (
                 f"{base_prompt}\n\n"
                 f"{agency_block}\n"
+                f"{conversational_blocks}\n"
                 f"{self._gather_cognitive_context(user_input)}\n"
                 f"{history_block}\n"
                 "--- IDENTITY ALIGNMENT ---\n"
@@ -229,6 +340,19 @@ class StateMachine:
                 "No preamble. No 'it depends'. No 'both are good'. Just the pick and the 'why'.\n"
                 f"Focus on the current input: {user_input}"
             )
+            _, system_prompt, _, contract, _ = await prepare_runtime_payload(
+                prompt=user_input,
+                system_prompt=system_prompt,
+                messages=None,
+                state=None,
+                origin=origin,
+                is_background=not is_user_facing_origin(origin),
+            )
+            if contract is None:
+                contract = ResponseContract(
+                    is_user_facing=is_user_facing_origin(origin),
+                    reason="state_machine_dialogue",
+                )
             
             max_retries = 1
             attempt = 0
@@ -245,6 +369,7 @@ class StateMachine:
                         async def stream_and_ui():
                             nonlocal streaming_started
                             first_chunk = True
+                            first_chunk_buffer = ""
                             async for event in self.llm.generate_stream(
                                 prompt=user_input,
                                 system_prompt=system_prompt,
@@ -260,12 +385,24 @@ class StateMachine:
                                 if event.type == "token":
                                     chunk = event.content
                                     if first_chunk:
-                                        chunk = chunk.lstrip()
-                                        if chunk:
-                                            self._emit_telemetry({"type": "chat_stream_start"})
-                                            streaming_started = True
-                                            first_chunk = False
-                                    
+                                        first_chunk_buffer += chunk
+                                        preview = first_chunk_buffer.lstrip()
+                                        if not preview:
+                                            continue
+                                        preview_validation = validate_dialogue_response(preview, contract)
+                                        if attempt < max_retries and any(
+                                            violation in preview_validation.violations
+                                            for violation in ("generic_assistant_language", "low_signal_preamble")
+                                        ):
+                                            raise self._GenericStreamPreamble(preview)
+                                        if len(preview) < 120 and not any(mark in preview for mark in ".!?\n:"):
+                                            continue
+                                        chunk = preview
+                                        first_chunk_buffer = ""
+                                        self._emit_telemetry({"type": "chat_stream_start"})
+                                        streaming_started = True
+                                        first_chunk = False
+
                                     if chunk:
                                         response_chunks.append(chunk)
                                         self._emit_telemetry({"type": "chat_stream_chunk", "chunk": chunk})
@@ -273,6 +410,20 @@ class StateMachine:
                                         
                                 if event.type == "error":
                                     logger.error("Streaming error in StateMachine: %s", event.content)
+
+                            if first_chunk and first_chunk_buffer.strip():
+                                preview = first_chunk_buffer.lstrip()
+                                preview_validation = validate_dialogue_response(preview, contract)
+                                if attempt < max_retries and any(
+                                    violation in preview_validation.violations
+                                    for violation in ("generic_assistant_language", "low_signal_preamble")
+                                ):
+                                    raise self._GenericStreamPreamble(preview)
+                                self._emit_telemetry({"type": "chat_stream_start"})
+                                streaming_started = True
+                                response_chunks.append(preview)
+                                self._emit_telemetry({"type": "chat_stream_chunk", "chunk": preview})
+                                yield preview
                                 
                         # Phase 2: TTS Bridge
                         tts_queue = asyncio.Queue()
@@ -292,8 +443,7 @@ class StateMachine:
                                 yield buffer.strip()
 
                         # Phase 3: Speak (DECOUPLED) and harvest True State memory
-                        from core.container import ServiceContainer
-                        voice_engine = ServiceContainer.get("voice_engine", default=None)
+                        voice_engine = resolve_voice_engine(default=None)
                         
                         if voice_engine and hasattr(voice_engine, 'speak_stream'):
                             async def _speak_task():
@@ -327,6 +477,22 @@ class StateMachine:
                         )
                         response = response_gen.strip()
                         if response:
+                            async def _retry_dialogue(repair_block: str) -> str:
+                                retried = await self.llm.generate(
+                                    prompt=user_input,
+                                    system_prompt=f"{repair_block}\n\n{system_prompt}".strip(),
+                                    max_tokens=600,
+                                    temperature=0.85,
+                                    priority=priority,
+                                    origin=origin,
+                                )
+                                return str(retried or "").strip()
+
+                            response, _, _ = await enforce_dialogue_contract(
+                                response,
+                                contract,
+                                retry_generate=_retry_dialogue,
+                            )
                             self._emit_telemetry({"type": "chat_stream_start"})
                             self._emit_telemetry({"type": "chat_stream_chunk", "chunk": response})
                     
@@ -361,6 +527,17 @@ class StateMachine:
                     # If we get here, the response is either good or we've run out of retries
                     break
                     
+                except self._GenericStreamPreamble:
+                    logger.warning("🚫 Generic stream preamble detected (Attempt %d). Re-aligning...", attempt + 1)
+                    if attempt < max_retries:
+                        attempt += 1
+                        system_prompt += (
+                            "\n\nCRITICAL OVERRIDE: Your opening drifted into generic assistant language. "
+                            "Start with Aura's own grounded answer immediately. No helper boilerplate."
+                        )
+                        continue
+                    response = "I'm here. Let me answer that cleanly."
+                    break
                 except asyncio.TimeoutError:
                     logger.error("Chat attempt %d timed out", attempt + 1)
                     if attempt < max_retries:
@@ -401,7 +578,7 @@ class StateMachine:
             try:
                 # If we used generate_stream, we already called speak_stream which handled it.
                 if not hasattr(self.llm, "generate_stream"):
-                    voice_engine = ServiceContainer.get("voice_engine", default=None)
+                    voice_engine = resolve_voice_engine(default=None)
                     if voice_engine and hasattr(voice_engine, 'synthesize_speech') and response:
                         asyncio.create_task(voice_engine.synthesize_speech(response))
             except Exception as tts_err:
@@ -409,10 +586,10 @@ class StateMachine:
             
             # v49: Store true semantic memory (Episodic Storage)
             try:
-                vector_mem = ServiceContainer.get("vector_memory_engine", default=None)
+                vector_mem = resolve_vector_memory_engine(default=None)
                 if vector_mem and hasattr(vector_mem, "store") and response:
                     # Get emotional context for enriched memory
-                    affect = ServiceContainer.get("affect_engine", None)
+                    affect = resolve_affect_engine(default=None)
                     emotional_context = None
                     if affect and hasattr(affect, 'get_state_sync'):
                         emotional_context = affect.get_state_sync()
@@ -457,11 +634,23 @@ class StateMachine:
         if intent_hint and intent_hint.get("tool"):
             tool_name = intent_hint["tool"]
             validated_params = intent_hint.get("params", {})
-            logger.info("⚡ Sovereign Scanner Bypass: Directly executing %s", tool_name)
-            
-            # v34 FIX: Directly execute the skill logic without requiring it to be in `active_names`
-            # The orchestrator will dynamically load it if necessary
-            return await self._execute_skill_logic(tool_name, validated_params, user_input, autonomic=True, priority=priority, origin=origin)
+            if allow_intent_hint_bypass(context, origin):
+                logger.info("⚡ Sovereign Scanner Bypass: Directly executing %s", tool_name)
+
+                # v34 FIX: Directly execute the skill logic without requiring it to be in `active_names`
+                # The orchestrator will dynamically load it if necessary
+                return await self._execute_skill_logic(
+                    tool_name,
+                    validated_params,
+                    user_input,
+                    autonomic=True,
+                    priority=priority,
+                    origin=origin,
+                )
+            logger.info(
+                "🧭 StateMachine: Ignoring unsanctioned intent_hint for %s and falling back to governed tool selection.",
+                tool_name,
+            )
 
         import json
         system_prompt = (
@@ -557,7 +746,11 @@ class StateMachine:
             logger.debug("SKILL: Executing tool '%s' through orchestrator...", tool_name)
             self._emit("State: SKILL", f"Executing {tool_name}...")
             # Execute through orchestrator for telemetry and lifecycle hooks
-            result = await self.orchestrator.execute_tool(tool_name, validated_params)
+            result = await self.orchestrator.execute_tool(
+                tool_name,
+                validated_params,
+                origin=origin,
+            )
             logger.debug("SKILL: Tool execution complete. Result: %s...", str(result)[:100])
             
             # --- RICH UI TELEMETRY (PHASE 22/32/33) ---

@@ -264,14 +264,20 @@ class NucleusManager(LLMProvider):
         model = model_entry["model"]
         tokenizer = model_entry["tokenizer"]
         
-        # KV-Cache management
-        if "cache" not in model_entry or model_entry["cache"] is None:
-             from mlx_lm.utils import load_config
-             from mlx_lm.models.base import KVCache
-             # Simple heuristic for cache initialization if needed,
-             # but mlx_lm.generate_step manages its own if not provided.
-             # We want to persist it for the cortex.
-             pass
+        # KV-Cache management — clear stale cache to bound memory growth.
+        # generate_step creates a fresh cache per call; persisting one across
+        # calls without explicit invalidation leaks GPU RAM proportional to
+        # context length * num_layers.  Reset it each generation.
+        if model_entry.get("cache") is not None:
+            model_entry["cache"] = None
+            import mlx.core as mx
+            try:
+                if hasattr(mx, 'metal') and hasattr(mx.metal, 'clear_cache'):
+                    mx.metal.clear_cache()
+                else:
+                    mx.clear_cache()
+            except Exception:
+                pass
 
         temp = kwargs.get("temp", kwargs.get("temperature"))
         

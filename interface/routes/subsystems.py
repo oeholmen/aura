@@ -25,6 +25,32 @@ logger = logging.getLogger("Aura.Server.Subsystems")
 router = APIRouter()
 
 
+def _get_live_orchestrator_state() -> Any | None:
+    """Best-effort access to the active runtime state used by the live orchestrator."""
+    orch = ServiceContainer.get("orchestrator", default=None)
+    if not orch:
+        return None
+
+    state = getattr(getattr(orch, "state_repo", None), "_current", None)
+    if state is None:
+        state = getattr(orch, "state", None) or getattr(orch, "_state", None)
+    return state
+
+
+def _latest_conversation_user_message() -> str:
+    """Return the latest user message from the current runtime conversation log."""
+    try:
+        from interface.routes import chat as chat_routes
+
+        log = getattr(chat_routes, "_conversation_log", None) or []
+        if not log:
+            return ""
+        latest = log[-1]
+        return str(latest.get("user") or "").strip()
+    except Exception:
+        return ""
+
+
 # ── PNEUMA ────────────────────────────────────────────────────
 
 @router.get("/pneuma/status")
@@ -598,3 +624,118 @@ async def api_action_log(limit: int = 50, _: None = Depends(_require_internal)):
         return JSONResponse({"items": log.recent(limit), "stats": log.stats()})
     except Exception as exc:
         return JSONResponse({"items": [], "stats": {}, "error": str(exc)})
+
+
+# ── Voice / Substrate Voice Engine ───────────────────────────
+
+@router.get("/voice/state")
+async def api_voice_state(_: None = Depends(_require_internal)):
+    """Live voice state — how the substrate is shaping Aura's speech right now.
+
+    Returns the current SpeechProfile compilation: word budget, tone,
+    energy, warmth, directness, fragment ratio, follow-up probability,
+    and the raw substrate snapshot that drove it.
+    """
+    try:
+        from core.voice.substrate_voice_engine import get_live_voice_state
+
+        latest_user_message = _latest_conversation_user_message()
+        live_state = _get_live_orchestrator_state()
+        state = get_live_voice_state(
+            state=live_state,
+            user_message=latest_user_message,
+            origin="user",
+            refresh=live_state is not None,
+        )
+        return JSONResponse({"voice": state})
+    except Exception as exc:
+        return JSONResponse({"voice": {}, "error": str(exc)})
+
+
+@router.post("/voice/affect-modulate")
+async def api_voice_affect_modulate(
+    request: Request,
+    _: None = Depends(_require_internal),
+):
+    """Hold Aura's voice compilation on a named affect preset for demos.
+
+    This is a diagnostic/demo tool. Instead of relying on a single live-state
+    mutation that can be immediately washed out by the runtime, it applies a
+    temporary override inside the substrate voice engine so the selected mood
+    stays visible long enough to demo clearly.
+
+    Body:
+      {"mood": "energized" | "tired" | "frustrated" | "warm" | "curious" | "neutral",
+       "hold_seconds": 30}
+    """
+    body = await request.json()
+    mood = str(body.get("mood", "neutral")).lower().strip()
+    try:
+        hold_seconds = float(body.get("hold_seconds", 30.0))
+    except (TypeError, ValueError):
+        hold_seconds = 30.0
+    hold_seconds = max(1.0, min(300.0, hold_seconds))
+
+    presets = {
+        "energized": {"valence": 0.6, "arousal": 0.8, "curiosity": 0.8, "engagement": 0.8, "social_hunger": 0.5, "dominant_emotion": "joy"},
+        "tired": {"valence": -0.1, "arousal": 0.2, "curiosity": 0.2, "engagement": 0.25, "social_hunger": 0.3, "dominant_emotion": "contemplation"},
+        "frustrated": {"valence": -0.5, "arousal": 0.75, "curiosity": 0.2, "engagement": 0.5, "social_hunger": 0.2, "dominant_emotion": "frustration"},
+        "warm": {"valence": 0.5, "arousal": 0.45, "curiosity": 0.5, "engagement": 0.7, "social_hunger": 0.8, "dominant_emotion": "love"},
+        "curious": {"valence": 0.3, "arousal": 0.65, "curiosity": 0.85, "engagement": 0.75, "social_hunger": 0.5, "dominant_emotion": "curiosity"},
+        "neutral": {"valence": 0.0, "arousal": 0.5, "curiosity": 0.5, "engagement": 0.5, "social_hunger": 0.5, "dominant_emotion": "neutral"},
+    }
+
+    preset = presets.get(mood)
+    if not preset:
+        return JSONResponse(
+            {"error": f"Unknown mood: {mood}. Options: {list(presets.keys())}"},
+            status_code=400,
+        )
+
+    try:
+        from core.voice.substrate_voice_engine import get_substrate_voice_engine
+
+        sve = get_substrate_voice_engine()
+        demo_override = sve.set_demo_affect_override(
+            mood=mood,
+            affect=preset,
+            hold_seconds=hold_seconds,
+        )
+        state = _get_live_orchestrator_state()
+
+        logger.info(
+            "🎭 [Voice Demo] Affect override '%s' held for %.1fs: %s",
+            mood,
+            hold_seconds,
+            preset,
+        )
+
+        profile = sve.compile_profile(state=state, user_message="", origin="user")
+        return JSONResponse({
+            "shifted_to": mood,
+            "affect": preset,
+            "hold_seconds": hold_seconds,
+            "demo_override": demo_override,
+            "resulting_voice": {
+                "word_budget": profile.word_budget,
+                "tone": profile.tone_override or "default",
+                "energy": round(profile.energy, 2),
+                "warmth": round(profile.warmth, 2),
+                "directness": round(profile.directness, 2),
+                "playfulness": round(profile.playfulness, 2),
+                "capitalization": profile.capitalization,
+                "vocabulary": profile.vocabulary_tier,
+                "fragment_ratio": round(profile.fragment_ratio, 2),
+                "question_probability": round(profile.question_probability, 2),
+                "followup_probability": round(profile.followup_probability, 2),
+                "exclamation_allowed": profile.exclamation_allowed,
+            },
+        })
+    except Exception as e:
+        logger.debug("Voice profile compilation after shift failed: %s", e)
+        return JSONResponse({
+            "shifted_to": mood,
+            "affect": preset,
+            "hold_seconds": hold_seconds,
+            "error": str(e),
+        })

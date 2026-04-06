@@ -276,6 +276,32 @@ def test_terminal_fallback_suppresses_when_executive_unavailable_in_live_runtime
     )
 
 
+def test_enqueue_message_blocks_unapproved_background_injection(orchestrator, monkeypatch):
+    ServiceContainer.clear()
+    clear_degraded_events()
+    ServiceContainer.register_instance("executive_core", SimpleNamespace(name="exec"), required=False)
+    ServiceContainer.lock_registration()
+
+    orchestrator.message_queue = asyncio.Queue(maxsize=10)
+
+    monkeypatch.setattr(
+        "core.constitution.get_constitutional_core",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            approve_initiative_sync=lambda *args, **kwargs: (False, "blocked_by_test")
+        ),
+    )
+
+    orchestrator.enqueue_message("Do not queue this", origin="background")
+
+    assert orchestrator.message_queue.qsize() == 0
+    events = get_recent_degraded_events(limit=10)
+    assert any(
+        event.get("subsystem") == "message_queue"
+        and event.get("reason") == "background_enqueue_blocked"
+        for event in events
+    )
+
+
 def test_late_causal_service_registration_after_lock_is_reported():
     ServiceContainer.clear()
     clear_degraded_events()
@@ -384,8 +410,10 @@ async def test_continuous_perception_blocks_unapproved_autonomous_injection(monk
     ServiceContainer.lock_registration()
 
     monkeypatch.setattr(
-        "core.executive.executive_core.get_executive_core",
-        lambda: SimpleNamespace(approve_background_task=AsyncMock(return_value=(False, "blocked"))),
+        "core.constitution.get_constitutional_core",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            approve_initiative=AsyncMock(return_value=(False, "blocked", None))
+        ),
     )
 
     engine._dispatch_spontaneous_intent("A visual observation", source="vision_delta")
@@ -398,6 +426,52 @@ async def test_continuous_perception_blocks_unapproved_autonomous_injection(monk
     assert any(
         event.get("subsystem") == "continuous_perception"
         and event.get("reason") == "autonomous_intent_blocked"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_unprompted_stimulus_blocks_when_constitution_rejects(orchestrator, monkeypatch):
+    clear_degraded_events()
+    orchestrator.process_user_input_priority = AsyncMock()
+
+    monkeypatch.setattr(
+        "core.constitution.get_constitutional_core",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            approve_initiative=AsyncMock(return_value=(False, "blocked", None))
+        ),
+    )
+
+    await orchestrator.process_unprompted_stimulus("vision", {}, "sudden motion")
+
+    orchestrator.process_user_input_priority.assert_not_awaited()
+    events = get_recent_degraded_events(limit=10)
+    assert any(
+        event.get("subsystem") == "sensory_motor"
+        and event.get("reason") == "stimulus_blocked"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_impulse_blocks_when_constitution_rejects(orchestrator, monkeypatch):
+    clear_degraded_events()
+    orchestrator.process_user_input_priority = AsyncMock()
+
+    monkeypatch.setattr(
+        "core.constitution.get_constitutional_core",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            approve_initiative=AsyncMock(return_value=(False, "blocked", None))
+        ),
+    )
+
+    await orchestrator.handle_impulse("explore_knowledge")
+
+    orchestrator.process_user_input_priority.assert_not_awaited()
+    events = get_recent_degraded_events(limit=10)
+    assert any(
+        event.get("subsystem") == "autonomy"
+        and event.get("reason") == "impulse_processing_blocked"
         for event in events
     )
 
@@ -465,6 +539,35 @@ async def test_autonomous_initiative_loop_blocks_unapproved_browser_research(mon
     assert any(
         event.get("subsystem") == "autonomous_initiative_loop"
         and event.get("reason") == "research_tool_blocked"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_initiative_loop_reports_missing_research_tool(monkeypatch):
+    ServiceContainer.clear()
+    clear_degraded_events()
+
+    import time as _time
+    fake_orch = SimpleNamespace(
+        _last_user_interaction_time=_time.time() - 86400,
+        is_busy=False,
+        _suppress_unsolicited_proactivity_until=0.0,
+        _foreground_user_quiet_until=0.0,
+    )
+    monkeypatch.setattr(
+        "core.autonomous_initiative_loop._background_initiative_allowed",
+        lambda *_a, **_kw: True,
+    )
+
+    loop = AutonomousInitiativeLoop(orchestrator=fake_orch)
+    await loop.trigger_gap_search("novel topic")
+
+    events = get_recent_degraded_events(limit=10)
+    assert any(
+        event.get("subsystem") == "autonomous_initiative_loop"
+        and event.get("reason") == "research_tool_unavailable"
+        and event.get("detail") == "sensory_motor_cortex"
         for event in events
     )
 
@@ -702,6 +805,42 @@ async def test_orchestrator_execute_tool_blocks_when_constitutional_gate_unavail
     assert "gate unavailable" in result["error"].lower()
 
 
+@pytest.mark.asyncio
+async def test_orchestrator_execute_tool_blocks_when_capability_token_missing(orchestrator, monkeypatch):
+    ServiceContainer.register_instance("executive_core", object(), required=False)
+    ServiceContainer.lock_registration()
+
+    constitution = SimpleNamespace(
+        begin_tool_execution=AsyncMock(
+            return_value=SimpleNamespace(
+                approved=True,
+                capability_token_id=None,
+                constraints={},
+                decision=SimpleNamespace(reason="approved"),
+                executive_intent_id="intent-1",
+            )
+        ),
+        finish_tool_execution=AsyncMock(),
+    )
+
+    orchestrator.router = SimpleNamespace(
+        skills={"notify_user": object()},
+        execute=AsyncMock(return_value={"ok": True}),
+    )
+
+    monkeypatch.setattr(
+        "core.constitution.get_constitutional_core",
+        lambda *_args, **_kwargs: constitution,
+    )
+
+    result = await orchestrator.execute_tool("notify_user", {"message": "hi"}, origin="user")
+
+    assert result["ok"] is False
+    assert "capability token missing" in result["error"].lower()
+    assert orchestrator.router.execute.await_count == 0
+    assert constitution.finish_tool_execution.await_count == 1
+
+
 def test_knowledge_graph_blocks_memory_write_when_constitutional_gate_rejects(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "core.constitution.get_constitutional_core",
@@ -797,8 +936,10 @@ async def test_agency_pulse_blocks_unapproved_autonomous_action(orchestrator, mo
     )
 
     monkeypatch.setattr(
-        "core.executive.executive_core.get_executive_core",
-        lambda: SimpleNamespace(approve_background_task=AsyncMock(return_value=(False, "blocked"))),
+        "core.constitution.get_constitutional_core",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            approve_initiative=AsyncMock(return_value=(False, "blocked", None))
+        ),
     )
 
     await orchestrator._pulse_agency_core()

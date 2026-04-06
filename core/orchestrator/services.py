@@ -1,6 +1,10 @@
 from __future__ import annotations
 import logging
 from typing import Any, Optional
+
+from core.health.degraded_events import record_degraded_event
+from core.runtime.service_access import optional_service, require_service
+
 from .orchestrator_types import SystemStatus
 
 logger = logging.getLogger(__name__)
@@ -8,52 +12,99 @@ logger = logging.getLogger(__name__)
 class OrchestratorServicesMixin:
     """Mixin for service resolution and property getters."""
 
-    def _get_service(self, name: str, alias: Optional[str] = None) -> Any:
+    _CRITICAL_SERVICES = frozenset({
+        "cognitive_engine",
+        "liquid_state",
+        "memory_facade",
+        "capability_engine",
+        "self_model",
+        "knowledge_graph",
+        "goal_hierarchy",
+    })
+
+    def _runtime_live(self) -> bool:
+        try:
+            from core.container import ServiceContainer
+
+            return (
+                ServiceContainer.has("executive_core")
+                or ServiceContainer.has("aura_kernel")
+                or ServiceContainer.has("kernel_interface")
+                or bool(getattr(ServiceContainer, "_registration_locked", False))
+            )
+        except Exception:
+            return False
+
+    def _record_missing_service(self, name: str, alias: Optional[str], *, error: Optional[Exception] = None) -> None:
+        notices = getattr(self, "_missing_service_notices", None)
+        if notices is None:
+            notices = set()
+            setattr(self, "_missing_service_notices", notices)
+        key = f"{name}:{alias or ''}"
+        if key in notices:
+            return
+        notices.add(key)
+        try:
+            record_degraded_event(
+                "orchestrator_services",
+                "critical_service_missing",
+                detail=name,
+                severity="warning",
+                classification="background_degraded",
+                context={"alias": alias or "", "error": type(error).__name__ if error else ""},
+            )
+        except Exception as exc:
+            logger.debug("Critical service degraded-event logging failed for %s: %s", name, exc)
+
+    def _get_service(self, name: str, alias: Optional[str] = None, *, critical: bool = False) -> Any:
         """Standardized resolver for orchestrator dependencies.
         
         v50: Fail-soft stabilization.
         """
-        from core.container import ServiceNotFoundError, get_container
-        container = get_container()
-        
         # Check for overrides first (v14.2)
         override_attr = f"_{name}_override"
         if hasattr(self, override_attr):
             return getattr(self, override_attr)
-            
+
+        service_error: Exception | None = None
+        if critical and self._runtime_live():
+            try:
+                return require_service(name, alias)
+            except Exception as exc:
+                service_error = exc
+                logger.debug("Critical service lookup failed for '%s' (alias=%s): %s", name, alias, exc)
+
         try:
-            val = container.get(name, default=None)
+            val = optional_service(name, alias, default=None)
             if val is not None:
                 return val
         except Exception as e:
-            logger.debug("Primary service lookup failed for '%s': %s", name, e)
-            
-        if alias:
-            try:
-                val = container.get(alias, default=None)
-                if val is not None:
-                    return val
-            except Exception as e:
-                logger.debug("Alias lookup failed for '%s' (alias of %s): %s", alias, name, e)
-        
+            service_error = service_error or e
+            logger.debug("Service lookup failed for '%s' (alias=%s): %s", name, alias, e)
+
         # v50: Fallback to existing attribute if set via earlier registration
         cached_attr = f"_{name.replace(' ', '_')}"
-        if hasattr(self, cached_attr):
-            return getattr(self, cached_attr)
-            
+        if cached_attr in getattr(self, "__dict__", {}):
+            cached = getattr(self, cached_attr)
+            if cached is not None:
+                return cached
+
+        if critical and self._runtime_live():
+            self._record_missing_service(name, alias, error=service_error)
+
         # Patch 9: Fail-soft during stabilization
         logger.debug("Service '%s' (alias: %s) not found. Returning None.", name, alias)
         return None
 
     @property
-    def cognitive_engine(self): return self._get_service("cognitive_engine")
+    def cognitive_engine(self): return self._get_service("cognitive_engine", critical=True)
     @cognitive_engine.setter
     def cognitive_engine(self, value): setattr(self, "_cognitive_engine_override", value)
 
     @property
     def liquid_state(self): 
         """Resolved via 'liquid_state' or 'affect_engine' alias."""
-        return self._get_service("liquid_state", "affect_engine")
+        return self._get_service("liquid_state", "affect_engine", critical=True)
     @liquid_state.setter
     def liquid_state(self, value): setattr(self, "_liquid_state_override", value)
 
@@ -64,14 +115,14 @@ class OrchestratorServicesMixin:
     def personality_engine(self, value): setattr(self, "_personality_engine_override", value)
 
     @property
-    def memory(self): return self._get_service("memory_facade")
+    def memory(self): return self._get_service("memory_facade", critical=True)
     @memory.setter
     def memory(self, value): setattr(self, "_memory_facade_override", value)
 
     @property
     def capability_engine(self): 
         """Resolved via 'capability_engine' or 'skill_registry' alias."""
-        return self._get_service("capability_engine", "skill_registry")
+        return self._get_service("capability_engine", "skill_registry", critical=True)
     @capability_engine.setter
     def capability_engine(self, value): setattr(self, "_capability_engine_override", value)
 
@@ -86,7 +137,7 @@ class OrchestratorServicesMixin:
     def intent_router(self, value): setattr(self, "_cognitive_router_override", value)
 
     @property
-    def identity(self): return self._get_service("self_model", "identity")
+    def identity(self): return self._get_service("self_model", "identity", critical=True)
     @identity.setter
     def identity(self, value): setattr(self, "_self_model_override", value)
 
@@ -121,12 +172,12 @@ class OrchestratorServicesMixin:
     def motivation(self, value): setattr(self, "_motivation_engine_override", value)
 
     @property
-    def knowledge_graph(self): return self._get_service("knowledge_graph")
+    def knowledge_graph(self): return self._get_service("knowledge_graph", critical=True)
     @knowledge_graph.setter
     def knowledge_graph(self, value): setattr(self, "_knowledge_graph_override", value)
 
     @property
-    def goal_hierarchy(self): return self._get_service("goal_hierarchy")
+    def goal_hierarchy(self): return self._get_service("goal_hierarchy", critical=True)
     @goal_hierarchy.setter
     def goal_hierarchy(self, value): setattr(self, "_goal_hierarchy_override", value)
     

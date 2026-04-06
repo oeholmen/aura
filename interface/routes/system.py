@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import sys
 import time
@@ -142,6 +143,41 @@ def _normalize_percentish(value: Any) -> float | None:
     if abs(number) <= 1.0:
         number *= 100.0
     return max(0.0, min(100.0, number))
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively coerce runtime payloads into JSON-safe primitives."""
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if hasattr(value, "item"):
+        try:
+            return _json_safe(value.item())
+        except Exception:
+            pass
+    if hasattr(value, "tolist") and not isinstance(value, (str, bytes, bytearray)):
+        try:
+            return _json_safe(value.tolist())
+        except Exception:
+            pass
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if math.isnan(coerced) or math.isinf(coerced):
+        return None
+    return coerced
 
 
 def _collect_liquid_state_payload(
@@ -516,7 +552,7 @@ async def api_health(request: Request):
         if ls and hasattr(ls, "get_status"):
             ls_data = ls.get_status()
 
-        vad_data = {"valence": 0.0, "arousal": 0.0, "dominance": 0.0}
+        vad_data = {"valence": 0.0, "arousal": 0.0, "dominance": 0.0, "_stale": True}
         engine = ServiceContainer.get("cognitive_engine", default=None)
         if engine and hasattr(engine, "consciousness"):
             v_state = await asyncio.wait_for(
@@ -527,7 +563,8 @@ async def api_health(request: Request):
                 "valence": v_state.get("valence", 0.0),
                 "arousal": v_state.get("arousal", 0.0),
                 "dominance": v_state.get("dominance", 0.0),
-                "volatility": v_state.get("volatility", 0.0)
+                "volatility": v_state.get("volatility", 0.0),
+                "_stale": False,
             }
             ls_dict = cast(dict, ls_data)
             ls_dict["vad"] = vad_data
@@ -544,8 +581,16 @@ async def api_health(request: Request):
     except Exception as e:
         logger.debug("Transcendence status collection failed: %s", e)
 
+    # Agency: derive from energy + curiosity + active autonomous thought
+    _energy_raw = float(ls_data.get("energy", 0))
+    _curiosity_raw = float(ls_data.get("curiosity", 0))
+    _thinking = bool(orch and getattr(orch, "_current_thought_task", None)
+                     and not orch._current_thought_task.done())
+    _agency_score = (_energy_raw * 0.4 + _curiosity_raw * 0.4 + (30.0 if _thinking else 0.0))
+    _agency_score = min(100.0, max(0.0, _agency_score))
+
     cortex = {
-        "agency":    float(int(float(ls_data.get("energy", 0)) * 10)) / 10.0,
+        "agency":    float(int(_agency_score * 10)) / 10.0,
         "curiosity": float(int(float(ls_data.get("curiosity", 0)) * 10)) / 10.0,
         "fixes":     orch_status.get("stats", {}).get("modifications_made", 0),
         "beliefs":   0,
@@ -556,7 +601,7 @@ async def api_health(request: Request):
         "stealth":   config.security.enable_stealth_mode,
         "scratchpad": ServiceContainer.get("scratchpad_engine", default=None) is not None,
         "forge":      ServiceContainer.get("hephaestus_engine", default=None) is not None,
-        "subconscious": "dreaming" if ls_data.get("boredom", 0) > 0.8 else "idle",
+        "subconscious": "dreaming" if getattr(orch, "boredom", 0) > 45 else "idle",
         "unity":      ServiceContainer.get("soma", default=None) is not None,
         "p_core_usage": float(int(p_core * 10)) / 10.0,
         "singularity_factor": float(int(transcendence_data.get("meta_evolution", {}).get("acceleration_factor", 1.0) * 100)) / 100.0,
@@ -682,12 +727,13 @@ async def api_health(request: Request):
         logger.debug("Resilience status collection failed: %s", e)
 
     # ── Qualia Status ──
-    qualia_data: Dict[str, Any] = {"pri": 0.0, "q_norm": 0.0, "dominant_dim": "none", "in_attractor": False}
+    qualia_data: Dict[str, Any] = {"pri": 0.0, "q_norm": 0.0, "dominant_dim": "none", "in_attractor": False, "_stale": True}
     try:
         qualia = ServiceContainer.get("qualia_synthesizer", default=None)
         if not qualia and orch:
             qualia = getattr(orch, "qualia", None)
         if qualia:
+            qualia_data["_stale"] = False
             qualia_data["pri"] = round(float(getattr(qualia, "pri", 0.0)), 4)
             qualia_data["q_norm"] = round(float(getattr(qualia, "q_norm", 0.0)), 4)
             qualia_data["dominant_dim"] = getattr(qualia, "_history", None) and len(qualia._history) > 0 and qualia._history[-1].dominant_dimension or "none"
@@ -710,12 +756,13 @@ async def api_health(request: Request):
 
     # ── PNEUMA Engine Status ──
     pneuma_data: Dict[str, Any] = {"temperature": 0.7, "arousal": 0.0, "stability": 0.0,
-                   "attractor_count": 0, "efe_score": 0.0, "online": False}
+                   "attractor_count": 0, "efe_score": 0.0, "online": False, "_stale": True}
     try:
         from core.pneuma.pneuma import get_pneuma
         pn = get_pneuma()
         if pn and pn._running:
             pneuma_data["online"] = True
+            pneuma_data["_stale"] = False
             pneuma_data["temperature"] = round(pn.get_llm_temperature(), 3)
             pe = getattr(pn, "precision", None)
             if pe and hasattr(pe, "fhn"):
@@ -730,12 +777,13 @@ async def api_health(request: Request):
 
     # ── MHAF Field Status ──
     mhaf_data: Dict[str, Any] = {"phi": 0.0, "nodes": 0, "edges": 0, "free_energy": 0.0,
-                 "lexicon_size": 0, "online": False}
+                 "lexicon_size": 0, "online": False, "_stale": True}
     try:
         from core.consciousness.mhaf_field import get_mhaf
         mhaf = get_mhaf()
         if mhaf and mhaf._running:
             mhaf_data["online"] = True
+            mhaf_data["_stale"] = False
             mhaf_data["nodes"] = len(mhaf._nodes)
             mhaf_data["edges"] = len(mhaf._edges)
             mhaf_data["phi"] = round(float(mhaf._global_phi), 4)
@@ -751,17 +799,16 @@ async def api_health(request: Request):
         logger.debug("Neologism lexicon count failed: %s", e)
 
     # ── Security Status ──
-    security_data: Dict[str, Any] = {}
+    security_data: Dict[str, Any] = {
+        "trust_level": "unknown", "threat_score": 0.0,
+        "integrity_ok": True, "passphrase_set": False, "_stale": True,
+    }
     try:
         from core.security.trust_engine import get_trust_engine
         te = get_trust_engine()
         ts = te.get_status()
-        security_data = {
-            "trust_level": ts.get("level", "guest"),
-            "threat_score": 0.0,
-            "integrity_ok": True,
-            "passphrase_set": False,
-        }
+        security_data["trust_level"] = ts.get("level", "guest")
+        security_data["_stale"] = False
     except Exception as e:
         logger.debug("Security status collection failed: %s", e)
     try:
@@ -775,7 +822,9 @@ async def api_health(request: Request):
     try:
         from core.security.integrity_guardian import get_integrity_guardian
         igs = get_integrity_guardian().get_status()
-        security_data["integrity_ok"] = igs.get("alert_count", 0) == 0
+        security_data["integrity_ok"] = bool(
+            igs.get("integrity_ok", igs.get("alert_count", 0) == 0)
+        )
         security_data["integrity_files"] = igs.get("manifest_files", 0)
     except Exception as _exc:
         logger.debug("Suppressed Exception: %s", _exc)
@@ -906,7 +955,7 @@ async def api_health(request: Request):
             "timestamp": datetime.now(tz=timezone.utc).isoformat()
         }
 
-    return JSONResponse(payload)
+    return JSONResponse(_json_safe(payload))
 
 
 @router.get("/tools/catalog")

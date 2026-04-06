@@ -1,0 +1,96 @@
+{
+  "claim_scope": {
+    "supports": [
+      "competitive attention selection",
+      "temporal continuity across cycles",
+      "self-prediction with measurable surprise",
+      "homeostatic internal regulation",
+      "hidden-state opacity metrics"
+    ],
+    "does_not_support": [
+      "direct proof of subjective experience",
+      "resolution of the hard problem"
+    ]
+  },
+  "workspace": {
+    "tick": 12,
+    "last_winner": "social_signal",
+    "last_content": "Cycle 12: track socially relevant external cues",
+    "last_priority": 0.281,
+    "pending_candidates": 0,
+    "inhibited_sources": [],
+    "broadcast_history_len": 12,
+    "ignition_level": 0.469,
+    "ignited": false,
+    "ignition_count": 1,
+    "phi": 0.3633
+  },
+  "temporal_binding": {
+    "total_events": 12,
+    "present_window_events": 12,
+    "anchors": 0,
+    "narrative_age_secs": 0.0,
+    "uptime_hours": 0.0,
+    "avg_valence": 0.463,
+    "narrative": "[AUTOBIOGRAPHICAL PRESENT - 0.0h uptime]\nCurrent affective tone: positive.\nMost salient recent focus: 'Cycle 3: investigate uncertainty in recent state drift'.\nRecent stream (10 events):\n  [0s ago | positive | sig=0.5] Cycle 6: investigate uncertainty in recent state drift\n  [0s ago | positive | sig=0.5] Cycle 7: investigate uncertainty in recent state drift\n  [0s ago | positive | sig=0.5] Cycle 8: investigate uncertainty in recent state drift\n  [0s ago | neutral | sig=0.6] Cycle 9: track socially relevant external cues\n  [0s ago | positive | sig=0.5] Cycle 10: track socially relevant external cues"
+  },
+  "self_prediction": {
+    "smoothed_error": 0.269,
+    "surprise_count": 0,
+    "valence_error_ema": 0.138,
+    "drive_error_ema": 0.0,
+    "focus_error_ema": 0.76,
+    "most_unpredictable": "attentional_focus",
+    "current_prediction": {
+      "affect": 0.37,
+      "drive": "metabolism",
+      "focus": "drive_curiosity",
+      "confidence": 0.73
+    }
+  },
+  "homeostasis": {
+    "integrity": 0.851,
+    "persistence": 0.946,
+    "curiosity": 0.648,
+    "metabolism": 0.493,
+    "sovereignty": 0.876,
+    "will_to_live": 0.829,
+    "context_block": "## HOMEOSTASIS\nVitality: 0.83 (falling) | watch: metabolism | success_rate: 100%",
+    "inference_modifiers": {
+      "temperature_mod": 0.105,
+      "token_multiplier": 0.946,
+      "caution_level": 0.149,
+      "exploration_tendency": 0.519,
+      "vitality": 0.829
+    }
+  },
+  "structural_opacity": {
+    "measurement_count": 12,
+    "last_opacity": 0.01745112624247254,
+    "last_causal_depth": 0.36325161009678925,
+    "last_predictability": 0.9825488737575274,
+    "status": {
+      "avg_opacity_index": 0.017,
+      "avg_causal_depth": 0.3705,
+      "avg_exterior_predictability": 0.983,
+      "criterion_met_fraction": 0.0,
+      "measurements": 12,
+      "status": "criterion_not_met"
+    },
+    "specious_present_norm": 1.2434
+  },
+  "observed_winners": [
+    "drive_curiosity",
+    "drive_curiosity",
+    "drive_curiosity",
+    "drive_curiosity",
+    "drive_curiosity",
+    "drive_curiosity",
+    "drive_curiosity",
+    "drive_curiosity",
+    "social_signal",
+    "social_signal",
+    "social_signal",
+    "social_signal"
+  ]
+}

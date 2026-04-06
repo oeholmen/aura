@@ -30,6 +30,7 @@ class CognitiveIntegrationLayer:
         self.monologue = None
         self.language_center = None
         self._initialized = False
+        self._processing_turn = False  # True while process_turn is executing (Phase 5 suppression)
         self._reflex_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="AuraReflex")
 
     def setup(self):
@@ -111,7 +112,49 @@ class CognitiveIntegrationLayer:
         """
         The standardized entry point for the Orchestrator's Phase 7 pipeline.
         Orchestrates Kernel evaluation -> InnerMonologue (planned) -> LanguageCenter expression.
+
+        Sets _processing_turn to True for the duration so Phase 5 knows
+        not to fire in parallel (single causal spine enforcement).
         """
+        self._processing_turn = True
+        try:
+            return await self._process_turn_inner(message, context)
+        finally:
+            self._processing_turn = False
+
+    async def _process_turn_inner(self, message: str, context: Optional[dict] = None) -> str:
+        """Inner implementation of process_turn (wrapped by _processing_turn guard).
+
+        The substrate voice engine compiles a SpeechProfile at entry and
+        shapes the final response at exit — same as Phase 5, ensuring
+        ONE voice regardless of which path generates the response.
+        """
+        # ── SUBSTRATE VOICE: Compile speech profile ──────────────────
+        _sve = None
+        _speech_profile = None
+        try:
+            from core.voice.substrate_voice_engine import get_substrate_voice_engine
+            _sve = get_substrate_voice_engine()
+            # Get the orchestrator's state for substrate reading
+            orch = self.orchestrator
+            state = None
+            if orch:
+                state = getattr(getattr(orch, "state_repo", None), "_current", None)
+                if state is None:
+                    state = getattr(orch, "state", None) or getattr(orch, "_state", None)
+            _speech_profile = _sve.compile_profile(
+                state=state,
+                user_message=message[:500],
+                origin="user",
+            )
+            logger.debug(
+                "🗣️ [Phase7→SubstrateVoice] Profile: budget=%d, tone=%s",
+                _speech_profile.word_budget,
+                _speech_profile.tone_override or "default",
+            )
+        except Exception as _sve_exc:
+            logger.debug("SubstrateVoiceEngine compile in Phase 7 skipped: %s", _sve_exc)
+
         if not self.is_active:
             await self.initialize()
 
@@ -134,7 +177,7 @@ class CognitiveIntegrationLayer:
         )
         if reflex_response:
             logger.info("⚡ [REFLEX] Instant response generated (Thread Isolated).")
-            return reflex_response
+            return self._shape_with_substrate(reflex_response, _sve, _speech_profile)
 
         if not self.kernel:
             logger.error("CognitiveIntegrationLayer: Kernel missing during process_turn.")
@@ -171,11 +214,10 @@ class CognitiveIntegrationLayer:
         if self.language_center:
             try:
                 if self.monologue:
-                    # Fix: InnerMonologue uses 'think', not 'process'
                     packet = await self.monologue.think(message, brief)
-                    return await self.language_center.express(packet, message)
+                    raw = await self.language_center.express(packet, message)
+                    return self._shape_with_substrate(raw, _sve, _speech_profile)
                 else:
-                    # Fallback: Shim a ThoughtPacket for the LanguageCenter
                     from core.inner_monologue import ThoughtPacket
                     packet = ThoughtPacket(
                         stance=brief.prior_beliefs[0] if brief.prior_beliefs else "I approach this with curiosity.",
@@ -185,7 +227,8 @@ class CognitiveIntegrationLayer:
                         length_target=brief.complexity if brief.complexity in ("brief", "medium", "extended") else "medium",
                         model_tier="local"
                     )
-                    return await self.language_center.express(packet, message)
+                    raw = await self.language_center.express(packet, message)
+                    return self._shape_with_substrate(raw, _sve, _speech_profile)
             except Exception as e:
                 logger.exception("Error during cognitive expression: %s", e)
                 final_response = "I'm processing that. Give me a second—my internal monologue is a bit of a maze right now."
@@ -225,7 +268,25 @@ class CognitiveIntegrationLayer:
             except Exception as e:
                 logger.debug("Ava response analysis failed: %s", e)
                 
-        return final_response
+        return self._shape_with_substrate(final_response, _sve, _speech_profile)
+
+    @staticmethod
+    def _shape_with_substrate(response: str, sve, profile) -> str:
+        """Shape a response through the substrate voice engine.
+
+        This ensures that EVERY response from Phase 7 — reflex, language
+        center, or fallback — passes through the substrate's voice shaping.
+        The substrate compiled constraints at entry; this enforces them at exit.
+        """
+        if not sve or not profile or not response:
+            return response
+        try:
+            shaped = sve.shape_response(response)
+            if isinstance(shaped, list):
+                return shaped[0]  # Primary message; extras queued by orchestrator
+            return shaped
+        except Exception:
+            return response
 
     async def process_autonomous(self) -> Optional[str]:
         """

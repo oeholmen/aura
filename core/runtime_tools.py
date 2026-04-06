@@ -6,6 +6,7 @@ import os
 import time
 from typing import Any, Dict
 from core.config import config
+from core.runtime.service_access import optional_service, resolve_canonical_self, resolve_identity_model
 
 logger = logging.getLogger("Aura.Runtime")
 
@@ -85,13 +86,11 @@ def get_runtime_state() -> Dict[str, Any]:
     # Pull live state from the service container (graceful fallback if not ready)
     drive_data = {"energy": 0.0}
     affect_data = {"valence": 0.0, "arousal": 0.0, "engagement": 0.0}
-    self_model_data = {"version": "8.2", "identity_index": 0.0}
+    self_model_data = {"version": 0, "identity_index": 0.0, "name": "Aura", "current_intention": ""}
 
     try:
         import asyncio
 
-        from core.container import ServiceContainer
-        
         # Helper to safely get status
         def _safe_status(service, fallback_data):
             if not service: return fallback_data
@@ -106,13 +105,13 @@ def get_runtime_state() -> Dict[str, Any]:
             except Exception:
                 return fallback_data
 
-        drive = ServiceContainer.get("drive_engine", default=None)
+        drive = optional_service("drive_engine", default=None)
         # Try sync properties if get_status is async/missing
         drive_data = _safe_status(drive, drive_data)
         if drive_data == {"energy": 0.0} and drive and hasattr(drive, "energy"):
              drive_data = {"energy": float(drive.energy)}
 
-        affect = ServiceContainer.get("affect_engine", default=None)
+        affect = optional_service("affect_engine", default=None)
         affect_data = _safe_status(affect, affect_data)
         if affect_data == {"valence": 0.0, "arousal": 0.0, "engagement": 0.0} and affect:
             affect_data = {
@@ -120,9 +119,30 @@ def get_runtime_state() -> Dict[str, Any]:
                 "arousal": float(getattr(affect, "arousal", 0))
             }
 
-        sm = ServiceContainer.get("self_model", default=None)
-        self_model_data = _safe_status(sm, self_model_data)
-        
+        canonical_self = resolve_canonical_self(default=None)
+        if canonical_self is not None:
+            self_model_data.update(
+                {
+                    "version": int(getattr(canonical_self, "version", 0) or 0),
+                    "name": str(getattr(getattr(canonical_self, "identity", None), "name", "") or "Aura"),
+                    "current_intention": str(getattr(canonical_self, "current_intention", "") or ""),
+                }
+            )
+
+        sm = resolve_identity_model(default=None)
+        reported_self = _safe_status(sm, {}) if sm is not None else {}
+        if isinstance(reported_self, dict):
+            merged_self = dict(reported_self)
+            merged_self.setdefault("name", str(getattr(sm, "name", "Aura") or "Aura"))
+            if canonical_self is not None:
+                merged_self["version"] = int(getattr(canonical_self, "version", merged_self.get("version", 0)) or 0)
+                merged_self["name"] = str(
+                    getattr(getattr(canonical_self, "identity", None), "name", merged_self.get("name", "Aura"))
+                    or merged_self.get("name", "Aura")
+                )
+                merged_self["current_intention"] = str(getattr(canonical_self, "current_intention", "") or "")
+            self_model_data = {**self_model_data, **merged_self}
+
     except Exception as e:
         logger.debug("Runtime state sampling skipped (pre-init): %s", e)
 

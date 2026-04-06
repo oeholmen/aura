@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set
 from core.container import ServiceContainer
 from core.config import config
 from core.runtime_tools import get_runtime_state
+from core.runtime.impulse_governance import run_governed_impulse
 from core.utils.task_tracker import get_task_tracker
 from core.runtime.background_policy import background_activity_reason
 import gc
@@ -498,17 +499,25 @@ class MetabolicCoordinator:
             logger.debug("Skipping boredom impulse: %s", reason)
             return
         logger.info("🥱 BOREDOM TRIGGERED: Generating curiosity impulse.")
-        # liquid_state.update() is async — schedule properly
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(orch.liquid_state.update(delta_curiosity=0.5))
-        except RuntimeError as _e:
-            logger.debug('Ignored RuntimeError in metabolic_coordinator.py: %s', _e)
         orch._last_boredom_impulse = time.time()
         topics = ["quantum physics", "ancient history", "future of AI", "art movements", "cybersecurity", "mythology"]
         topic = random.choice(topics)
-        if not orch.message_queue.full():
-            orch.enqueue_message(f"Impulse: I am bored. I want to research {topic}.", priority=25)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                run_governed_impulse(
+                    orch,
+                    source="metabolic_coordinator",
+                    summary=f"metabolic_boredom_impulse:{topic}",
+                    message=f"Impulse: I am bored. I want to research {topic}.",
+                    urgency=0.3,
+                    state_cause="metabolic_boredom_shift",
+                    state_update={"delta_curiosity": 0.5},
+                    enqueue_priority=25,
+                )
+            )
+        except RuntimeError as _e:
+            logger.debug('Ignored RuntimeError in metabolic_coordinator.py: %s', _e)
 
     def trigger_reflection_impulse(self):
         """Inject a self-reflection goal due to frustration."""
@@ -520,15 +529,23 @@ class MetabolicCoordinator:
             logger.debug("Skipping reflection impulse: %s", reason)
             return
         logger.info("😤 FRUSTRATION TRIGGERED: Generating reflection impulse.")
-        # liquid_state.update() is async — schedule properly
+        orch._last_reflection_impulse = time.time()
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(orch.liquid_state.update(delta_frustration=-0.3))
+            loop.create_task(
+                run_governed_impulse(
+                    orch,
+                    source="metabolic_coordinator",
+                    summary="metabolic_reflection_impulse",
+                    message="Impulse: I feel frustrated. I need to reflect on my recent interactions.",
+                    urgency=0.3,
+                    state_cause="metabolic_reflection_shift",
+                    state_update={"delta_frustration": -0.3},
+                    enqueue_priority=15,
+                )
+            )
         except RuntimeError as _e:
             logger.debug('Ignored RuntimeError in metabolic_coordinator.py: %s', _e)
-        orch._last_reflection_impulse = time.time()
-        if not orch.message_queue.full():
-            orch.enqueue_message("Impulse: I feel frustrated. I need to reflect on my recent interactions.", priority=15)
 
     def emit_neural_pulse(self):
         """Emit system health to thought stream."""

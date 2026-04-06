@@ -48,6 +48,12 @@ dist/
 .aura_snapshots/
 .aura_test.log
 
+# Icons and screenshots (kept locally, not in repo)
+aura_icon.png
+aura_icon.icns
+mujoco_screen.png
+interface/static/aura_avatar.png
+
 # OS
 .DS_Store
 .localized

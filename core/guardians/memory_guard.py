@@ -72,7 +72,22 @@ class MemoryGuard:
                     if mem.percent > 95:
                         try:
                             router = ServiceContainer.get("llm_router", default=None)
-                            if router and hasattr(router, "clear_cache"):
+                            gate = ServiceContainer.get("inference_gate", default=None)
+                            foreground_busy = False
+                            if gate:
+                                try:
+                                    foreground_busy = bool(
+                                        (hasattr(gate, "_foreground_user_turn_active") and gate._foreground_user_turn_active())
+                                        or (hasattr(gate, "_foreground_owner_active") and gate._foreground_owner_active())
+                                    )
+                                except Exception:
+                                    foreground_busy = False
+                            if foreground_busy:
+                                logger.warning(
+                                    "MemoryGuard: Skipping router cache purge during active foreground inference (%s%%)",
+                                    mem.percent,
+                                )
+                            elif router and hasattr(router, "clear_cache"):
                                 logger.info("MemoryGuard: Clearing LLM Router cache")
                                 router.clear_cache()
                         except Exception as e:

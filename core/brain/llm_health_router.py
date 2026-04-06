@@ -42,6 +42,7 @@ from core.brain.llm.runtime_wiring import (
     prepare_runtime_payload,
     should_force_tool_handoff,
 )
+from core.runtime.turn_analysis import analyze_turn
 
 logger = logging.getLogger("Brain.HealthRouter")
 
@@ -581,6 +582,11 @@ class HealthAwareLLMRouter:
         )
 
         try:
+            deterministic = self._deterministic_intent_classification(prompt)
+            if deterministic:
+                logger.info("🧭 Intent classification resolved deterministically: %s", deterministic)
+                return deterministic
+
             # We use generate_with_metadata directly to ensure strict parameters
             result = await self.generate_with_metadata(
                 prompt=prompt,
@@ -588,6 +594,7 @@ class HealthAwareLLMRouter:
                 max_tokens=10,
                 temperature=0.0,
                 prefer_tier=prefer_tier,
+                purpose="classification",
                 **kwargs
             )
             
@@ -840,6 +847,12 @@ class HealthAwareLLMRouter:
 
         return True
 
+    @staticmethod
+    def _deterministic_intent_classification(prompt: str) -> str:
+        if not str(prompt or "").strip():
+            return "casual"
+        return analyze_turn(prompt).semantic_mode
+
     @classmethod
     def _foreground_user_turn_active(cls) -> bool:
         try:
@@ -1042,6 +1055,9 @@ class HealthAwareLLMRouter:
         schema: Optional[Dict] = None,
         **kwargs,
     ) -> Dict[str, Any]:
+        purpose = str(kwargs.get("purpose", "") or "").lower()
+        classification_mode = purpose == "classification" or "intent classifier" in str(system_prompt or "").lower()
+
         # ── Neural Priming (Aura Persona Injection) ───────────────────────────
         # [Fix #11] Ensure Aura's identity is primed if not provided in system_prompt
         core_persona = (
@@ -1059,12 +1075,12 @@ class HealthAwareLLMRouter:
             "- Your memory spans working memory (short), RAG (semantic), and ColdStore (long-term)."
         )
         
-        if not system_prompt or "Aura" not in system_prompt:
+        if not classification_mode and (not system_prompt or "Aura" not in system_prompt):
             system_prompt = f"{core_persona}\n\n{system_prompt or ''}".strip()
 
         # ── Autonomous Context Injection (Somatic/Affective Safety Net) ───────
         # [Fix #11] If prompt lacks state context, inject a condensed summary.
-        if "AuraState" not in prompt and "[Affect:" not in prompt:
+        if not classification_mode and "AuraState" not in prompt and "[Affect:" not in prompt:
             from core.container import ServiceContainer
             ctx_summary = []
             

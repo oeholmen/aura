@@ -67,13 +67,7 @@ class GoalHierarchy:
         constitutional_runtime_live = False
         try:
             from core.container import ServiceContainer
-            from core.executive.executive_core import (
-                ActionType,
-                DecisionOutcome,
-                Intent,
-                IntentSource,
-                get_executive_core,
-            )
+            from core.constitution import get_constitutional_core
 
             constitutional_runtime_live = (
                 ServiceContainer.has("executive_core")
@@ -82,30 +76,28 @@ class GoalHierarchy:
                 or bool(getattr(ServiceContainer, "_registration_locked", False))
             )
             if constitutional_runtime_live:
-                intent = Intent(
-                    source=IntentSource.SYSTEM,
-                    goal=f"goal_hierarchy:{description}",
-                    action_type=ActionType.MUTATE_STATE,
-                    payload={
-                        "description": description,
-                        "parent_id": parent_id,
-                        "priority": priority,
-                    },
-                    priority=max(0.4, min(1.0, float(priority or 0.0))),
-                    requires_memory_commit=True,
+                approved, reason = get_constitutional_core().approve_state_mutation_sync(
+                    "system",
+                    f"goal_hierarchy:goal_add:{description[:120]}",
+                    urgency=max(0.4, min(1.0, float(priority or 0.0))),
                 )
-                record = get_executive_core().request_approval_sync(intent)
-                if record.outcome not in (DecisionOutcome.APPROVED, DecisionOutcome.DEGRADED):
+                if not approved:
+                    event_reason = "goal_add_blocked"
+                    if any(
+                        marker in str(reason or "")
+                        for marker in ("gate_failed", "required", "unavailable")
+                    ):
+                        event_reason = "goal_add_gate_failed"
                     try:
                         from core.health.degraded_events import record_degraded_event
 
                         record_degraded_event(
                             "goal_hierarchy",
-                            "goal_add_blocked",
+                            event_reason,
                             detail=description[:120],
                             severity="warning",
                             classification="background_degraded",
-                            context={"reason": record.reason},
+                            context={"reason": reason},
                         )
                     except Exception as degraded_exc:
                         logger.debug("GoalHierarchy degraded-event logging failed: %s", degraded_exc)

@@ -92,6 +92,10 @@ class IntegrityGuardian:
         self._manifest_hmac: Optional[str] = None
         self._last_check: float = 0.0
         self._alert_count: int = 0
+        self._last_issue_count: int = 0
+        self._last_tampered: List[str] = []
+        self._last_missing: List[str] = []
+        self._last_ok: bool = True
         self._hmac_secret = _get_hmac_secret()
         self._bg_task: Optional[asyncio.Task] = None
         MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -176,6 +180,12 @@ class IntegrityGuardian:
         """Rebuild the entire manifest from scratch (call after legitimate bulk changes)."""
         n = self._build_manifest()
         self._save_manifest()
+        self._last_check = time.time()
+        self._alert_count = 0
+        self._last_issue_count = 0
+        self._last_tampered = []
+        self._last_missing = []
+        self._last_ok = True
         logger.info("IntegrityGuardian: manifest rebuilt (%d files).", n)
         return n
 
@@ -185,6 +195,10 @@ class IntegrityGuardian:
             "alert_count": self._alert_count,
             "last_check_ago": round(time.time() - self._last_check, 0) if self._last_check else None,
             "manifest_valid": self._manifest_hmac is not None,
+            "current_issue_count": self._last_issue_count,
+            "last_tampered": list(self._last_tampered),
+            "last_missing": list(self._last_missing),
+            "integrity_ok": bool(self._manifest_hmac is not None and self._last_ok),
         }
 
     # ── Core Logic ─────────────────────────────────────────────────────────
@@ -231,6 +245,11 @@ class IntegrityGuardian:
         if legitimately_gone:
             for p in legitimately_gone:
                 self._manifest.pop(p, None)
+
+        self._last_tampered = list(tampered)
+        self._last_missing = list(missing)
+        self._last_issue_count = len(tampered) + len(missing)
+        self._last_ok = self._last_issue_count == 0
 
         if tampered or missing:
             self._alert_count += len(tampered) + len(missing)

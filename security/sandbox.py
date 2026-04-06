@@ -1,10 +1,12 @@
 """
-Security Sandbox for Autonomous Code Execution
-Implements resource limits, path validation, and command allowlisting.
+Sandbox for autonomous code execution.
 
-C-12 FIX: Added actual security enforcement — command allowlisting,
-path validation before execution, network blocking, and honest
-documentation about isolation limitations on macOS.
+Enforcement: command allowlisting per security level, rlimits on child
+processes, workdir containment, env-var stripping.
+
+Limitations: no filesystem or network namespace isolation. True sandboxing
+on macOS requires sandbox-exec or a container runtime. This is defense-in-depth,
+not a hard security boundary.
 """
 import os
 import sys
@@ -41,7 +43,7 @@ class SecurityLevel(Enum):
     PRIVILEGED = auto()    # Full access (internal only)
 
 
-# C-12 FIX: Explicit command allowlists per security level
+# Command allowlists per security level
 _ALLOWED_COMMANDS = {
     SecurityLevel.UNTRUSTED: frozenset(),  # Nothing allowed
     SecurityLevel.RESTRICTED: frozenset({
@@ -121,15 +123,16 @@ class SecurityViolation(Exception):
 class SecureSandbox:
     """Execution environment with resource limits and command allowlisting.
 
-    C-12 FIX: This sandbox now enforces:
+    Enforces:
     - Command allowlisting based on security level
-    - Path validation (workdir containment)
-    - Resource limits via rlimits
-    - Stdout/stderr size caps to prevent memory exhaustion
+    - Workdir containment (child process cwd)
+    - rlimits on CPU time, memory, file descriptors, file size
+    - Stdout/stderr size caps (1MB)
+    - Sensitive env-var stripping
 
-    NOTE: True filesystem/network isolation requires OS-level namespaces
-    (Linux cgroups/namespaces) or macOS sandbox-exec. This implementation
-    focuses on defense-in-depth within userspace constraints.
+    Does NOT provide: filesystem isolation, network isolation, or
+    mount namespaces. On macOS, true isolation requires sandbox-exec
+    or a container runtime.
     """
 
     MAX_OUTPUT_BYTES = 1024 * 1024  # 1MB output cap
@@ -170,7 +173,7 @@ class SecureSandbox:
         )
 
     def _validate_command(self, cmd: List[str]) -> List[str]:
-        """C-12 FIX: Validate command against allowlist."""
+        """Validate command against allowlist."""
         if not cmd:
             raise SecurityViolation("Empty command")
 
@@ -180,13 +183,9 @@ class SecureSandbox:
                 f"Command '{binary}' not in allowlist: {self.allowed_commands}"
             )
 
-        # Validate no shell metacharacters in arguments
-        import re
-        for i, arg in enumerate(cmd[1:], 1):
-            if re.search(r'[;&|`$]', arg):
-                raise SecurityViolation(
-                    f"Shell metacharacter in argument {i}: {arg!r}"
-                )
+        # No metacharacter filtering — we use subprocess.Popen with a list
+        # (no shell=True), so shell metacharacters have no special meaning.
+        # The allowlist above is the actual security boundary.
 
         return cmd
 
@@ -200,7 +199,7 @@ class SecureSandbox:
         start_time = time.time()
         violations = []
 
-        # C-12 FIX: Validate command before execution
+        # Validate command before execution
         try:
             cmd = self._validate_command(cmd)
         except SecurityViolation as sv:
@@ -220,7 +219,7 @@ class SecureSandbox:
         try:
             # Build environment with restricted vars
             env = os.environ.copy()
-            # C-12 FIX: Strip sensitive env vars from sandbox processes
+            # Strip sensitive env vars from sandbox processes
             for key in list(env.keys()):
                 if any(s in key.upper() for s in (
                     "TOKEN", "SECRET", "PASSWORD", "KEY", "CREDENTIAL", "AUTH"

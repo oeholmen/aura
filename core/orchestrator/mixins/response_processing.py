@@ -11,6 +11,10 @@ from typing import Any, Optional
 
 from core.utils.exceptions import capture_and_log
 from core.brain.types import ThinkingMode
+from core.phases.dialogue_policy import validate_dialogue_response
+from core.phases.response_contract import build_response_contract
+from core.runtime.governance_policy import allow_direct_user_shortcut
+from core.runtime.turn_analysis import analyze_turn
 from ...container import ServiceContainer
 
 logger = logging.getLogger(__name__)
@@ -180,6 +184,105 @@ class ResponseProcessingMixin:
         # Final Architectural Personality Lock
         response = self._filter_output(response)
 
+        # ── SUBSTRATE VOICE: Execute follow-ups and queued messages ──────
+        # The SubstrateVoiceEngine may have decided on:
+        # 1. Multi-message chunks (shaped_messages from multi-message split)
+        # 2. A natural follow-up (curiosity question, additional thought, etc.)
+        # These are dispatched here with natural delays.
+        _state_now = getattr(getattr(self, "state_repo", None), "_current", None) if hasattr(self, "state_repo") else None
+        _resp_mods = getattr(getattr(_state_now, "response_modifiers", None), "__getitem__", None)
+        if _state_now is None:
+            _resp_mods_dict = {}
+        else:
+            _resp_mods_dict = getattr(_state_now, "response_modifiers", {}) or {}
+
+        # 1. Queued multi-message chunks
+        queued_msgs = _resp_mods_dict.get("queued_messages")
+        if queued_msgs and isinstance(queued_msgs, list) and origin in ("user", "voice", "admin"):
+            async def _emit_queued(msgs: list, gate):
+                for i, msg in enumerate(msgs):
+                    delay = 1.0 + i * random.uniform(1.5, 3.5)
+                    await asyncio.sleep(delay)
+                    if gate and hasattr(gate, "emit"):
+                        await gate.emit(msg, origin=origin, target="primary")
+                    elif hasattr(self, "output_gate") and self.output_gate:
+                        await self.output_gate.emit(msg, origin=origin, target="primary")
+
+            gate = getattr(self, "output_gate", None)
+            self._fire_and_forget(
+                _emit_queued(queued_msgs, gate),
+                name="substrate_voice_queued_messages",
+            )
+
+        # 2. Natural follow-up (substrate-driven)
+        pending_fu = _resp_mods_dict.get("pending_followup")
+        if pending_fu and isinstance(pending_fu, dict) and origin in ("user", "voice", "admin"):
+            async def _execute_followup(fu_data: dict, user_msg: str, aura_resp: str):
+                try:
+                    from core.voice.substrate_voice_engine import get_substrate_voice_engine
+                    sve = get_substrate_voice_engine()
+                    from core.voice.natural_followup import FollowupDecision
+
+                    decision = FollowupDecision(
+                        should_followup=True,
+                        followup_type=fu_data.get("type", "additional_thought"),
+                        delay_seconds=fu_data.get("delay", 5.0),
+                        context_hint=fu_data.get("context_hint", ""),
+                        word_budget=fu_data.get("word_budget", 25),
+                    )
+
+                    # Wait the natural delay
+                    await asyncio.sleep(decision.delay_seconds)
+
+                    # Check if user spoke in the meantime (abort if so)
+                    last_user = getattr(self, "_last_user_interaction_time", 0)
+                    if time.time() - last_user < decision.delay_seconds:
+                        logger.debug("💬 [Followup] Aborted — user spoke during delay.")
+                        return
+
+                    # Build and generate the follow-up
+                    prompt = sve.build_followup_prompt(decision, user_msg, aura_resp)
+                    brain = getattr(self, "cognitive_engine", None)
+                    if not brain:
+                        return
+
+                    followup_text = await brain.generate(
+                        prompt,
+                        temperature=0.85,
+                        max_tokens=decision.word_budget * 3,
+                    )
+
+                    if followup_text and len(followup_text.strip()) > 3:
+                        # Shape the follow-up too
+                        from core.voice.speech_profile import SpeechProfile
+                        fu_profile = SpeechProfile(
+                            word_budget=decision.word_budget,
+                            trailing_question_banned=decision.followup_type != "curiosity",
+                            capitalization="lowercase" if sve.get_current_profile() and sve.get_current_profile().capitalization == "lowercase" else "natural",
+                        )
+                        from core.voice.response_shaper import ResponseShaper
+                        followup_text = ResponseShaper.shape(followup_text.strip(), fu_profile)
+                        if isinstance(followup_text, list):
+                            followup_text = followup_text[0]
+
+                        # Emit via output gate
+                        gate = getattr(self, "output_gate", None)
+                        if gate and hasattr(gate, "emit"):
+                            await gate.emit(followup_text, origin=origin, target="primary")
+                        sve.mark_followup_sent()
+                        logger.info(
+                            "💬 [Followup] Sent %s: %s",
+                            decision.followup_type,
+                            followup_text[:60],
+                        )
+                except Exception as e:
+                    logger.debug("Follow-up execution failed: %s", e)
+
+            self._fire_and_forget(
+                _execute_followup(pending_fu, message, response or ""),
+                name="substrate_voice_followup",
+            )
+
         return response
 
     async def _handle_thinking_timeout(self, origin: str):
@@ -305,6 +408,9 @@ class ResponseProcessingMixin:
         """
         if origin != "user" or not message:
             return None
+        if not allow_direct_user_shortcut(origin):
+            logger.info("🧭 Mycelial shortcut yielded to governed user-facing path")
+            return None
 
         # Redundant local import removed
         mycelium = ServiceContainer.get("mycelial_network", default=None)
@@ -321,6 +427,24 @@ class ResponseProcessingMixin:
         # 2. Handle Direct Responses (e.g. Identity/Status reflexes)
         if pw.direct_response:
             logger.info("🍄 [MYCELIUM] ⚡ Direct Reflex firing for: %s", pw.pathway_id)
+            try:
+                from core.constitution import get_constitutional_core
+
+                approved, reason, _authority_decision = await get_constitutional_core(self).approve_response(
+                    pw.direct_response,
+                    source=origin,
+                    urgency=0.5,
+                    state=getattr(getattr(self, "state_repo", None), "_current", None),
+                )
+                if not approved:
+                    logger.info(
+                        "🛡️ [AUTHORITY] Direct reflex '%s' blocked: %s",
+                        pw.pathway_id,
+                        reason,
+                    )
+                    return None
+            except Exception as exc:
+                logger.debug("Direct reflex authority gate failed: %s", exc)
             try:
                 from core.unified_action_log import get_action_log
                 get_action_log().record(f"direct_response:{pw.pathway_id}", f"mycelium:{pw.pathway_id}", "reflex", "bypassed_no_tool", pw.direct_response[:80])
@@ -346,7 +470,52 @@ class ResponseProcessingMixin:
         if not is_simple:
             return None
 
-        logger.info("🏎️ FAST-PATH: Bypassing Agentic Loop.")
+        current_state = getattr(getattr(self, "state_repo", None), "_current", None)
+        contract = None
+        if current_state is not None:
+            try:
+                contract = build_response_contract(
+                    current_state,
+                    message,
+                    is_user_facing=origin in ("user", "voice", "admin"),
+                )
+            except Exception as exc:
+                logger.debug("Fast-path response contract skipped: %s", exc)
+
+        analysis = analyze_turn(message)
+        if contract is not None and (
+            contract.requires_live_aura_voice()
+            or contract.requires_search
+            or contract.requires_memory_grounding
+            or contract.requires_identity_defense
+            or contract.requires_self_preservation
+        ):
+            logger.info("🏎️ FAST-PATH: yielding because governed contract requires richer handling.")
+            return None
+        if not shortcut_result and not analysis.everyday_chat_safe:
+            logger.info("🏎️ FAST-PATH: yielding because turn is not safe everyday chat.")
+            return None
+
+        # ── MANDATORY AUTHORITY GATE ─────────────────────────────────
+        # Fast-path is not exempt from constitutional/runtime governance.
+        _fp_receipt_id = None
+        try:
+            from core.constitution import get_constitutional_core
+
+            approved, reason, authority_decision = await get_constitutional_core(self).approve_response(
+                message[:200],
+                source=origin,
+                urgency=0.4,
+                state=current_state,
+            )
+            _fp_receipt_id = getattr(authority_decision, "substrate_receipt_id", None)
+            if not approved:
+                logger.info("🛑 Fast-path BLOCKED by authority gateway: %s", reason)
+                return None  # Fall through to full agentic loop
+        except Exception as e:
+            logger.debug("Authority gate check failed in fast-path (allowing): %s", e)
+
+        logger.info("🏎️ FAST-PATH: Authority-approved simple response.")
         from core.brain.cognitive_engine import ThinkingMode
 
         context = self._get_cleaned_history_context(10)
@@ -355,6 +524,16 @@ class ResponseProcessingMixin:
         p_ctx = self._get_personality_context()
         if p_ctx:
             context["personality"] = p_ctx
+        if contract is not None:
+            context["response_contract"] = contract.to_dict()
+            if contract.requires_live_aura_voice():
+                context["live_voice_contract"] = {
+                    "requires_first_person": True,
+                    "ban_assistant_boilerplate": True,
+                    "mood": getattr(getattr(current_state, "affect", None), "dominant_emotion", "neutral"),
+                    "attention_focus": getattr(getattr(current_state, "cognition", None), "attention_focus", "") or message,
+                    "free_energy": float(getattr(current_state, "free_energy", 0.0) or 0.0),
+                }
 
         if shortcut_result:
             message = self._inject_shortcut_results(message, shortcut_result)
@@ -378,7 +557,7 @@ class ResponseProcessingMixin:
             objective=message,
             context=context,
             mode=ThinkingMode.FAST,
-            origin="user",
+            origin=origin,
         )
 
         if not thought:
@@ -397,6 +576,23 @@ class ResponseProcessingMixin:
             return "I apologize, but my internal stream momentarily stalled. I am still here."
 
         response = self._filter_output(self._post_process_response(raw_content))
+        if contract is not None:
+            validation = validate_dialogue_response(response, contract)
+            if not validation.ok and contract.requires_live_aura_voice():
+                logger.info(
+                    "🏎️ FAST-PATH: yielding to deeper pass because live Aura voice contract failed (%s).",
+                    ", ".join(validation.violations) or "unspecified",
+                )
+                return None
+
+        # Record effect with exact receipt_id for audit provenance
+        try:
+            from core.consciousness.authority_audit import get_audit
+            get_audit().record_effect("response", "fast_path_response",
+                                      response[:80], receipt_id=_fp_receipt_id)
+        except Exception:
+            pass
+
         role = getattr(self, "AI_ROLE", "assistant")
         if isinstance(self.conversation_history, list):
             self.conversation_history.append({"role": role, "content": response})

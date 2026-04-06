@@ -6,7 +6,7 @@ def generate_grok_audit():
     target_bytes = 48 * 1024 * 1024
     output_path = Path.home() / "Desktop" / "Aura_Grok_Audit_Full.txt"
     
-    project_root = Path("/Users/bryan/.gemini/antigravity/scratch/autonomy_engine")
+    project_root = Path(__file__).resolve().parents[1]
     
     print(f"Bundling source for Grok Audit into {output_path}...")
     

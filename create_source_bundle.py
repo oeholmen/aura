@@ -2,8 +2,8 @@ import os
 import pathlib
 
 def create_bundle():
-    project_root = "/Users/bryan/.gemini/antigravity/scratch/autonomy_engine"
-    desktop_path = "/Users/bryan/Desktop/Aura_Source_Bundle.txt"
+    project_root = pathlib.Path(__file__).resolve().parent
+    desktop_path = pathlib.Path.home() / "Desktop" / "Aura_Source_Bundle.txt"
     
     extensions = {'.py', '.js', '.css', '.html', '.sh', '.spec', '.md', '.json'}
     exclude_dirs = {'.git', '__pycache__', 'dist', 'build', '.venv', 'env', 'node_modules', '.gemini', '.agents', '.agent'}

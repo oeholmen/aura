@@ -34,17 +34,17 @@ class VolitionEngine:
         self.last_speak_time = 0.0  # Track when she last spoke spontaneously
         self.last_action_time = 0.0  # Track when she last took any autonomous action
         
-        # --- AGENCY THRESHOLDS (v4.3) ---
+        # --- AGENCY THRESHOLDS ---
         self.boredom_threshold = 45       # Seconds before boredom goals kick in
-        self.impulse_cooldown = 10        # Min seconds between impulse checks
-        self.speak_cooldown = 45          # Min seconds between spontaneous speech
-        self.action_cooldown = 15         # Min seconds between autonomous actions
-        self.impulse_probability = 0.25   # 25% chance per eligible cycle to fire an impulse
-        
-        # --- IDLE AWARENESS (v5.1) ---
+        self.impulse_cooldown = 5         # Min seconds between impulse checks
+        self.speak_cooldown = 10          # Min seconds between spontaneous speech
+        self.action_cooldown = 5          # Min seconds between autonomous actions
+        self.impulse_probability = 0.8    # 80% chance per eligible cycle to fire an impulse
+
+        # --- IDLE AWARENESS ---
         self.unanswered_speak_count = 0   # How many times Aura spoke without user response
-        self.max_unanswered_before_silence = 3  # After 3 unanswered, stop speaking entirely
-        self.speak_backoff_multiplier = 1.0     # Increases with each unanswered message
+        self.max_unanswered_before_silence = 8  # Generous limit before silence
+        self.speak_backoff_multiplier = 1.0     # No aggressive backoff
         
         self.is_dreaming = False
         self._consecutive_idle_cycles = 0
@@ -244,7 +244,7 @@ class VolitionEngine:
 
                 self.last_speak_time = now
                 self.unanswered_speak_count += 1
-                self.speak_backoff_multiplier = min(8.0, self.speak_backoff_multiplier * 2.0)
+                self.speak_backoff_multiplier = min(2.0, self.speak_backoff_multiplier * 1.2)
                 try:
                     from core.unified_action_log import get_action_log
                     get_action_log().record("speak", "VolitionEngine.connection_drive", "gen1_volition", "approved", "spontaneous_reach_out")
@@ -329,7 +329,7 @@ class VolitionEngine:
             if speaks:
                 self.last_speak_time = now
                 self.unanswered_speak_count += 1
-                self.speak_backoff_multiplier = min(8.0, self.speak_backoff_multiplier * 2.0)
+                self.speak_backoff_multiplier = min(2.0, self.speak_backoff_multiplier * 1.2)
         
         logger.info("⚡ IMPULSE (%s): %s...", impulse_type, template[:80])
         

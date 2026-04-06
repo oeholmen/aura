@@ -137,7 +137,7 @@ class AffectEngineV2:
         # Issue 98: LLM Fallback state
         self._llm_available = True
         self._last_llm_failure = 0.0
-        self._llm_cooldown = 300 # Backward-compatible ceiling; active backoff is shorter.
+        self._llm_cooldown = 60 # Reduced ceiling for faster emotional appraisal recovery.
         self._llm_failure_count = 0
         self._llm_backoff_until = 0.0
         self._last_llm_failure_reason = ""

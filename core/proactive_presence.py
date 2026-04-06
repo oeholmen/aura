@@ -28,10 +28,10 @@ from core.utils.queues import USER_FACING_ORIGINS
 logger = logging.getLogger("Aura.ProactivePresence")
 
 # ── Tuning Constants ──────────────────────────────────────────────────────
-SOCIAL_COOLDOWN_SECONDS = 30     # Minimum gap after user spoke before Aura initiates
-IDLE_THRESHOLD_SECONDS  = 12     # How long idle before Aura considers speaking
-MIN_GAP_BETWEEN_OUTPUTS = 45     # Don't flood — minimum seconds between spontaneous outputs
-MAX_SPONTANEOUS_PER_HOUR = 8     # Hard cap on unsolicited outputs per hour
+SOCIAL_COOLDOWN_SECONDS = 8      # Brief pause after user spoke before Aura initiates
+IDLE_THRESHOLD_SECONDS  = 5      # How long idle before Aura considers speaking
+MIN_GAP_BETWEEN_OUTPUTS = 10     # Minimum seconds between spontaneous outputs
+MAX_SPONTANEOUS_PER_HOUR = 60    # Generous cap on unsolicited outputs per hour
 
 
 class ProactivePresence:
@@ -110,6 +110,12 @@ class ProactivePresence:
         self._user_away = False  # User is present again
         if self.orchestrator:
             self.orchestrator._last_user_interaction_time = time.time()
+        # Notify SubstrateVoiceEngine — cancel pending follow-ups
+        try:
+            from core.voice.substrate_voice_engine import get_substrate_voice_engine
+            get_substrate_voice_engine().on_user_spoke()
+        except Exception:
+            pass
 
     def mark_user_spoke_with_message(self, message: str):
         """Call with message content to detect away signals and update state.
@@ -173,9 +179,8 @@ class ProactivePresence:
         if self._user_speaking:
             return False
 
-        # Monologue guard: if Aura already emitted ≥2 spontaneous messages without a user
-        # reply, she should wait silently rather than talk into the void.
-        if self._consecutive_unprompted >= 2:
+        # Monologue guard: allow up to 5 spontaneous messages without user reply
+        if self._consecutive_unprompted >= 5:
             return False
 
         if self._foreground_lane_reserved(now):

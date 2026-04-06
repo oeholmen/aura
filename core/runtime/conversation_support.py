@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from core.runtime import service_access
+from core.runtime.turn_analysis import analyze_turn
 
 logger = logging.getLogger("Aura.ConversationSupport")
 
@@ -171,3 +172,109 @@ async def update_conversational_intelligence(user_input: str, aura_response: str
             await social_imagination.update_from_interaction(user_id, user_input, aura_response, {})
     except Exception as exc:
         logger.debug("SocialImagination update skipped: %s", exc)
+
+
+def _conversation_emotional_valence(user_input: str) -> float:
+    lowered = str(user_input or "").lower()
+    if any(token in lowered for token in ("love", "thanks", "thank you", "appreciate", "glad")):
+        return 0.4
+    if any(token in lowered for token in ("upset", "angry", "hurt", "afraid", "sad", "frustrated")):
+        return -0.3
+    return 0.1
+
+
+def _conversation_importance(user_input: str) -> float:
+    analysis = analyze_turn(user_input)
+    importance = 0.35
+    if analysis.requires_live_aura_voice:
+        importance += 0.25
+    if analysis.suggests_deliberate_mode:
+        importance += 0.15
+    if analysis.intent_type in {"SKILL", "TASK"}:
+        importance += 0.1
+    return min(0.95, importance)
+
+
+async def record_conversation_experience(user_input: str, aura_response: str, state: Any = None) -> None:
+    if not str(user_input or "").strip() or not str(aura_response or "").strip():
+        return
+
+    state_obj = state
+    if state_obj is None:
+        repo = service_access.resolve_state_repository(default=None)
+        state_obj = getattr(repo, "_current", None) if repo is not None else None
+
+    user_id = resolve_primary_user_id(state_obj)
+    importance = _conversation_importance(user_input)
+    emotional_valence = _conversation_emotional_valence(user_input)
+    analysis = analyze_turn(user_input)
+
+    await update_conversational_intelligence(user_input, aura_response, state_obj)
+    await record_shared_ground_callbacks(aura_response)
+
+    try:
+        episodic = service_access.optional_service("episodic_memory", default=None)
+        if episodic and hasattr(episodic, "record_episode_async"):
+            await episodic.record_episode_async(
+                context=f"User said: {str(user_input).strip()}",
+                action=f"Aura replied: {str(aura_response).strip()}",
+                outcome="Conversation changed shared context and should inform future continuity.",
+                success=True,
+                emotional_valence=emotional_valence,
+                tools_used=["conversation"],
+                lessons=[
+                    f"User interaction classified as {analysis.intent_type.lower()}:{analysis.semantic_mode}.",
+                    "Conversational exchanges should remain available as lived context, not just transcript data.",
+                ],
+                importance=importance,
+            )
+    except Exception as exc:
+        logger.debug("Episodic conversation recording skipped: %s", exc)
+
+    try:
+        entity_graph = service_access.optional_service("entity_graph", "relationship_graph", default=None)
+        if entity_graph and hasattr(entity_graph, "register_interaction"):
+            await entity_graph.register_interaction("aura_self", user_id, "conversation", "self", "person")
+    except Exception as exc:
+        logger.debug("Relationship graph update skipped: %s", exc)
+
+    try:
+        user_model = service_access.optional_service("user_model", "theory_of_mind_user_model", default=None)
+        if user_model and hasattr(user_model, "update_from_interaction"):
+            user_model.update_from_interaction(user_input, aura_response, {"source": "chat_api"})
+    except Exception as exc:
+        logger.debug("User model update skipped: %s", exc)
+
+    try:
+        learner = service_access.optional_service("continuous_learning", "continuous_learning_engine", default=None)
+        if learner and hasattr(learner, "record_interaction"):
+            await learner.record_interaction(
+                user_input=user_input,
+                aura_response=aura_response,
+                user_name=user_id,
+                domain="conversation",
+                strategy="dialogic_exchange",
+            )
+    except Exception as exc:
+        logger.debug("Continuous learning update skipped: %s", exc)
+
+    try:
+        bryan_model = service_access.optional_service(
+            "bryan_model_engine",
+            "bryan_model",
+            "user_model_engine",
+            default=None,
+        )
+        if bryan_model and hasattr(bryan_model, "_model"):
+            bryan_model._model.total_messages += 2
+            bryan_model._model.conversation_count += 1
+            if analysis.semantic_mode in {"technical", "critical", "philosophical"} and hasattr(
+                bryan_model, "observe_pattern"
+            ):
+                bryan_model.observe_pattern(
+                    f"Bryan often brings {analysis.semantic_mode} conversation into the foreground."
+                )
+            if hasattr(bryan_model, "save"):
+                bryan_model.save()
+    except Exception as exc:
+        logger.debug("Bryan model update skipped: %s", exc)

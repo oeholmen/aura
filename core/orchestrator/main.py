@@ -990,11 +990,16 @@ class RobustOrchestrator(OrchestratorBootMixin, StatusManagerMixin, Orchestrator
                 logger.warning("Integrity Monitor init failed (non-fatal): %s", im_err)
             
             try:
-                from core.utils.concurrency import EventLoopMonitor
-                self._event_loop_monitor = EventLoopMonitor(threshold=0.1, interval=1.0)
-                if self._event_loop_monitor:
+                # Reuse the monitor created in hardening init if it exists
+                existing_monitor = ServiceContainer.get("event_loop_monitor", default=None)
+                if existing_monitor is not None:
+                    self._event_loop_monitor = existing_monitor
+                    logger.info("✓ Event Loop Monitor active (reused from hardening)")
+                else:
+                    from core.utils.concurrency import EventLoopMonitor
+                    self._event_loop_monitor = EventLoopMonitor(threshold=0.1, interval=1.0)
                     self._event_loop_monitor.start()
-                logger.info("✓ Event Loop Monitor active")
+                    logger.info("✓ Event Loop Monitor active")
             except Exception as el_err:
                 logger.warning("Event Loop Monitor init failed: %s", el_err)
             
@@ -1020,16 +1025,17 @@ class RobustOrchestrator(OrchestratorBootMixin, StatusManagerMixin, Orchestrator
                 }
                 if swarm_autostart and self.sovereign_swarm is not None and hasattr(self.sovereign_swarm, "start_permanent_debate"):
                     swarm_allowed = True
-                    swarm_reason = "executive_unavailable"
+                    swarm_reason = "authority_unavailable"
                     try:
-                        from core.executive.executive_core import get_executive_core
+                        from core.constitution import get_constitutional_core
 
-                        swarm_allowed, swarm_reason = await get_executive_core().approve_background_task(
-                            "permanent_swarm_debate",
+                        swarm_allowed, swarm_reason, _authority_decision = await get_constitutional_core(self).approve_initiative(
+                            "peer_mode:permanent_swarm_debate",
                             source="peer_mode",
+                            urgency=0.35,
                         )
                     except Exception as exec_err:
-                        logger.debug("Permanent swarm executive gate unavailable: %s", exec_err)
+                        logger.debug("Permanent swarm authority gate unavailable: %s", exec_err)
 
                     # [STABILITY] Run in background to avoid blocking orchestrator launch
                     # especially under memory pressure when model loading is slow.
@@ -1052,16 +1058,17 @@ class RobustOrchestrator(OrchestratorBootMixin, StatusManagerMixin, Orchestrator
                 # 🛠️ [PEER MODE] Evolution 7: Sovereign self-modification loop
                 if hasattr(self, '_self_modification') or hasattr(self, 'meta_learning'):
                     self_mod_allowed = True
-                    self_mod_reason = "executive_unavailable"
+                    self_mod_reason = "authority_unavailable"
                     try:
-                        from core.executive.executive_core import get_executive_core
+                        from core.constitution import get_constitutional_core
 
-                        self_mod_allowed, self_mod_reason = await get_executive_core().approve_background_task(
-                            "sovereign_self_modification_loop",
+                        self_mod_allowed, self_mod_reason, _authority_decision = await get_constitutional_core(self).approve_initiative(
+                            "peer_mode:sovereign_self_modification_loop",
                             source="peer_mode",
+                            urgency=0.45,
                         )
                     except Exception as exec_err:
-                        logger.debug("Self-mod executive gate unavailable: %s", exec_err)
+                        logger.debug("Self-mod authority gate unavailable: %s", exec_err)
 
                     if self_mod_allowed:
                         self._fire_and_forget(
@@ -1651,9 +1658,28 @@ class RobustOrchestrator(OrchestratorBootMixin, StatusManagerMixin, Orchestrator
                             skill_name="TerminalMonitor"
                         )
                     
+                    from core.constitution import get_constitutional_core
                     from core.utils.task_tracker import get_task_tracker
+
+                    allowed, reason, _authority_decision = await get_constitutional_core(self).approve_initiative(
+                        f"terminal_self_heal:{error_goal.get('objective', '')[:160]}",
+                        source="terminal_monitor",
+                        urgency=0.72,
+                        state=getattr(getattr(self, "state_repo", None), "_current", None),
+                    )
+                    if not allowed:
+                        record_degraded_event(
+                            "terminal_monitor",
+                            "self_heal_blocked",
+                            detail=str(error_goal.get("objective", ""))[:160],
+                            severity="warning",
+                            classification="background_degraded",
+                            context={"reason": reason},
+                        )
+                        return
+
                     self._current_thought_task = get_task_tracker().track_task(asyncio.create_task(
-                        self._handle_incoming_message(error_goal['objective'], origin="terminal_monitor")
+                        self.process_user_input_priority(error_goal['objective'], origin="terminal_monitor")
                     ))
         except Exception as e:
             record_degraded_event(
@@ -1679,6 +1705,37 @@ class RobustOrchestrator(OrchestratorBootMixin, StatusManagerMixin, Orchestrator
             transcript.add_system(f"Spontaneous {modality} stimulus: {context}")
         except Exception as e:
             capture_and_log(e, {'module': __name__})
+
+        try:
+            from core.constitution import get_constitutional_core
+
+            allowed, reason, _authority_decision = await get_constitutional_core(self).approve_initiative(
+                f"sensory_stimulus:{modality}:{context[:160]}",
+                source="sensory_motor",
+                urgency=0.62,
+                state=getattr(getattr(self, "state_repo", None), "_current", None),
+            )
+            if not allowed:
+                record_degraded_event(
+                    "sensory_motor",
+                    "stimulus_blocked",
+                    detail=f"{modality}:{context[:160]}",
+                    severity="warning",
+                    classification="background_degraded",
+                    context={"reason": reason},
+                )
+                return
+        except Exception as e:
+            record_degraded_event(
+                "sensory_motor",
+                "stimulus_gate_failed",
+                detail=f"{modality}:{context[:160]}",
+                severity="warning",
+                classification="background_degraded",
+                context={"error": type(e).__name__},
+                exc=e,
+            )
+            return
 
         # Inject as an unprompted thought into the core cognitive cycle
         await self.process_user_input_priority(f"[ENVIRONMENTAL TRIGGER]: {context}", origin="sensory_motor")
@@ -1997,7 +2054,8 @@ def create_orchestrator(**kwargs) -> RobustOrchestrator:
                     self.state_repo = type('StateRepo', (), {
                         'db_path': Path('data/aura_state.db'),
                         'initialize': lambda *args, **kwargs: asyncio.sleep(0),
-                        'get_current': lambda *args, **kwargs: asyncio.sleep(0)
+                        'get_current': lambda *args, **kwargs: asyncio.sleep(0),
+                        'commit': lambda *args, **kwargs: asyncio.sleep(0),
                     })()
 
                 @property
@@ -2036,3 +2094,13 @@ def create_orchestrator(**kwargs) -> RobustOrchestrator:
 
 SovereignOrchestrator = RobustOrchestrator
 Orchestrator = RobustOrchestrator
+AsyncAgentOrchestrator = RobustOrchestrator
+
+__all__ = [
+    "AsyncAgentOrchestrator",
+    "Orchestrator",
+    "RobustOrchestrator",
+    "SovereignOrchestrator",
+    "SystemStatus",
+    "create_orchestrator",
+]

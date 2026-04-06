@@ -376,9 +376,37 @@ class LiquidSubstrate:
 
     async def update(self, delta_frustration=0.0, delta_curiosity=0.0, **kwargs):
         """Standard update cycle with support for direct stimulus injection.
-        
+
         v31: Support direct VAD and psych value overrides from the MetabolicCoordinator sync bridge.
+        v32: All external substrate mutations now pass through SubstrateAuthority.
         """
+        # ── SUBSTRATE AUTHORITY GATE ─────────────────────────────────
+        # Every external mutation of the substrate state goes through the
+        # authority. This closes the "indirect causal channel" where ungated
+        # callers could shift substrate state to influence gated outputs.
+        try:
+            from core.container import ServiceContainer
+            _sa = ServiceContainer.get("substrate_authority", default=None)
+            if _sa:
+                from core.consciousness.substrate_authority import ActionCategory, AuthorizationDecision
+                # Determine if this is a significant mutation
+                _magnitude = abs(delta_frustration) + abs(delta_curiosity) + sum(
+                    abs(float(v)) for v in kwargs.values() if isinstance(v, (int, float))
+                )
+                if _magnitude > 0.05:  # only gate significant changes, not micro-adjustments
+                    _sv = _sa.authorize(
+                        content=f"substrate_update:df={delta_frustration:.2f},dc={delta_curiosity:.2f}",
+                        source=kwargs.get("_caller", "external"),
+                        category=ActionCategory.STATE_MUTATION,
+                        priority=min(1.0, _magnitude),
+                        is_critical=False,
+                    )
+                    if _sv.decision == AuthorizationDecision.BLOCK:
+                        logger.debug("Substrate update BLOCKED by authority (magnitude=%.3f)", _magnitude)
+                        return
+        except Exception as _gate_err:
+            logger.debug("Substrate authority gate failed (allowing update): %s", _gate_err)
+
         with self.sync_lock:
             # 1. Apply legacy deltas
             self.x[self.idx_frustration] = np.clip(self.x[self.idx_frustration] + delta_frustration, -1.0, 1.0)
@@ -642,10 +670,29 @@ class LiquidSubstrate:
 
     async def inject_stimulus(self, vector: Union[np.ndarray, List[float]], weight: float = 1.0) -> None:
         """Inject an external stimulus vector into the substrate activations."""
+        # Substrate authority gate: stimulus injections are state mutations
+        try:
+            from core.container import ServiceContainer
+            _sa = ServiceContainer.get("substrate_authority", default=None)
+            if _sa and weight > 0.2:  # only gate significant injections
+                from core.consciousness.substrate_authority import ActionCategory, AuthorizationDecision
+                _sv = _sa.authorize(
+                    content=f"stimulus_injection:weight={weight:.2f}",
+                    source="substrate_stimulus",
+                    category=ActionCategory.STATE_MUTATION,
+                    priority=min(1.0, weight),
+                    is_critical=False,
+                )
+                if _sv.decision == AuthorizationDecision.BLOCK:
+                    logger.debug("Stimulus injection BLOCKED by authority (weight=%.2f)", weight)
+                    return
+        except Exception:
+            pass  # fail-open
+
         # Convert to numpy array if list passed (Phase XVI hardening)
         if isinstance(vector, list):
             vector = np.array(vector)
-            
+
         if len(vector) != self.config.neuron_count:
             new_vec = np.zeros(self.config.neuron_count)
             size = min(len(vector), self.config.neuron_count)

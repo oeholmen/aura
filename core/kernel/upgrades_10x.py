@@ -20,6 +20,41 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("Aura.10x")
 
+
+def _compact_skill_result_payload(result: object) -> dict[str, object]:
+    if not isinstance(result, dict):
+        text = str(result)
+        return {"result": text[:1200] + ("…[result truncated]" if len(text) > 1200 else "")}
+
+    payload: dict[str, object] = {}
+    for key in ("ok", "summary", "content", "result", "title", "source", "url"):
+        value = result.get(key)
+        if value in (None, ""):
+            continue
+        if isinstance(value, str):
+            payload[key] = value[:1200] + ("…[result truncated]" if len(value) > 1200 else "")
+        else:
+            payload[key] = value
+
+    compact_results: list[dict[str, str]] = []
+    for item in list(result.get("results") or [])[:3]:
+        if not isinstance(item, dict):
+            continue
+        compact_item: dict[str, str] = {}
+        for key in ("title", "snippet", "url"):
+            value = item.get(key)
+            if value in (None, ""):
+                continue
+            compact_item[key] = str(value)[:400]
+        if compact_item:
+            compact_results.append(compact_item)
+    if compact_results:
+        payload["results"] = compact_results
+
+    if not payload:
+        payload["result"] = str(result)[:1200]
+    return payload
+
 # ──────────────────────────────────────────────────────────────
 # PHASE 1: EternalMemoryPhase → Persistent Memory Agent = 10/10
 # ──────────────────────────────────────────────────────────────
@@ -547,6 +582,19 @@ class GodModeToolPhase(Phase):
             })
             state.response_modifiers["last_skill_run"] = skill_name
             state.response_modifiers["last_skill_ok"] = ok
+            state.response_modifiers["last_skill_result_payload"] = _compact_skill_result_payload(result)
+            if ok and skill_name in {"web_search", "sovereign_browser"} and getattr(contract, "requires_search", False):
+                try:
+                    from core.phases.response_generation_unitary import UnitaryResponsePhase
+
+                    direct_reply = UnitaryResponsePhase._format_grounded_search_reply(
+                        objective,
+                        state.response_modifiers["last_skill_result_payload"],
+                    )
+                    if direct_reply:
+                        state.response_modifiers["precomputed_grounded_reply"] = direct_reply
+                except Exception as exc:
+                    logger.debug("GodMode: precomputed grounded reply skipped: %s", exc)
             logger.info("✅ GodMode: '%s' result injected into working memory.", skill_name)
 
         except Exception as e:
@@ -592,9 +640,12 @@ class EternalGrowthEngine(Phase):
                     allow_cloud_fallback=False,
                 )
                 if autonomous_goal:  # FIX: was setting "[AUTONOMOUS INITIATIVE] None"
-                    state, _ = await get_executive_authority().propose_initiative_to_state(
+                    from core.runtime.proposal_governance import propose_governed_initiative_to_state
+
+                    state, _ = await propose_governed_initiative_to_state(
                         state,
                         f"[AUTONOMOUS INITIATIVE] {autonomous_goal}",
+                        orchestrator=None,
                         source="eternal_growth",
                         kind="growth",
                         urgency=0.72,
@@ -686,9 +737,12 @@ class NativeMultimodalBridge(Phase):
                 if voice_organ and voice_organ.instance and hasattr(voice_organ.instance, "listen"):
                     transcript = await voice_organ.instance.listen()
                     if transcript:
-                        state, _ = await get_executive_authority().propose_initiative_to_state(
+                        from core.runtime.proposal_governance import propose_governed_initiative_to_state
+
+                        state, _ = await propose_governed_initiative_to_state(
                             state,
                             transcript,
+                            orchestrator=None,
                             source="native_multimodal_voice",
                             kind="sensory_input",
                             urgency=0.8,

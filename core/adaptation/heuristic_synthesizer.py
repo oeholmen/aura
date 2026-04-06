@@ -51,6 +51,22 @@ class HeuristicSynthesizer:
                 "updated_at": time.time()
             }, f, indent=2)
 
+    def _trim_heuristics(self) -> None:
+        if len(self._active_heuristics) <= MAX_ACTIVE_HEURISTICS:
+            return
+
+        def _priority(record: Dict[str, Any]) -> tuple[int, int, float]:
+            survival = int(record.get("survival_count", 0) or 0)
+            hits = int(record.get("hits", 0) or 0)
+            created_at = float(record.get("created_at", 0) or 0.0)
+            return (survival, hits, created_at)
+
+        self._active_heuristics = sorted(
+            self._active_heuristics,
+            key=_priority,
+            reverse=True,
+        )[:MAX_ACTIVE_HEURISTICS]
+
     async def synthesize_from_telemetry(self) -> Dict[str, Any]:
         """Run a synthesis cycle: analyze errors/retries and extract new rules.
         
@@ -132,14 +148,7 @@ class HeuristicSynthesizer:
                                 })
                                 added += 1
 
-                    # Trim to max
-                    if len(self._active_heuristics) > MAX_ACTIVE_HEURISTICS:
-                        # Keep newest
-                        self._active_heuristics = sorted(
-                            self._active_heuristics,
-                            key=lambda h: h.get("created_at", 0),
-                            reverse=True
-                        )[:MAX_ACTIVE_HEURISTICS]
+                    self._trim_heuristics()
 
                     # Offload synchronous JSON dump
                     import asyncio
@@ -190,13 +199,9 @@ class HeuristicSynthesizer:
             "source": source,
             "domain": domain,
             "hits": 0,
+            "survival_count": 0,
         })
-        if len(self._active_heuristics) > MAX_ACTIVE_HEURISTICS:
-            self._active_heuristics = sorted(
-                self._active_heuristics,
-                key=lambda h: h.get("created_at", 0),
-                reverse=True,
-            )[:MAX_ACTIVE_HEURISTICS]
+        self._trim_heuristics()
         self._save()
         logger.info("📐 Ingested external heuristic from %s: %s", source, rule[:80])
         return True

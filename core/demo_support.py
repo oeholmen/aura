@@ -43,6 +43,11 @@ _CONTINUITY_HINTS = (
     "what were you doing before this session",
     "right before this session started",
     "before this session started",
+    "what were you just working on",
+    "what were you working on just now",
+    "what did you just work on",
+    "what did you just inspect",
+    "what did you just finish in the background",
 )
 _PRIORITY_HINTS = (
     "based on your current system state and goals",
@@ -456,6 +461,12 @@ async def maybe_build_recent_activity_reply(message: str, orchestrator: Any) -> 
     if not is_recent_activity_query(message):
         return None
 
+    collapsed = _collapsed(message)
+    if "just" in collapsed:
+        preamble = "I was just working on"
+    else:
+        preamble = "Right before this session, I was running a background diagnostic on"
+
     payload = _recent_activity_payload(orchestrator)
     if isinstance(payload, dict):
         target_name = payload.get("target_name") or Path(str(payload.get("target_path", ""))).name or "that file"
@@ -463,7 +474,7 @@ async def maybe_build_recent_activity_reply(message: str, orchestrator: Any) -> 
         if summary:
             summary = _strip_diagnostic_prefix(summary)
             return (
-                f"Right before this session, I was running a background diagnostic on `{target_name}`. "
+                f"{preamble} `{target_name}`. "
                 f"{summary or "I finished tracing its core function and stored the result for continuity."}"
             )
 
@@ -490,7 +501,7 @@ async def maybe_build_recent_activity_reply(message: str, orchestrator: Any) -> 
                     target_match = _BACKGROUND_DIAGNOSTIC_RE.search(context)
                     target_name = target_match.group(1) if target_match else "a local file"
                     return (
-                        f"Right before this session, I was working on `{Path(target_name).name}`. "
+                        f"{preamble} `{Path(target_name).name}`. "
                         f"{_truncate(str(getattr(ep, 'outcome', '') or getattr(ep, 'full_description', '') or ''), 320)}"
                     )
     except Exception as exc:

@@ -8,6 +8,8 @@ import re
 import time
 from typing import Any
 
+from core.runtime.governance_policy import allow_direct_user_shortcut
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,8 +113,8 @@ class IncomingLogicMixin:
 
     async def _original_handle_incoming_logic(self, message: Any, origin: str = "user", suppress_ui: bool = False):
         """Route an incoming message through the deterministic State Machine pipeline."""
-        from ..container import ServiceContainer
-        from ..config import config
+        from ...container import ServiceContainer
+        from ...config import config
         from core.autonomy_guardian import AutonomyGuardian
         from core.supervisor.registry import get_task_registry, TaskStatus
         from core.health.degraded_events import record_degraded_event
@@ -226,14 +228,28 @@ class IncomingLogicMixin:
                     if affect and hasattr(affect, 'get_state_sync'):
                         emotional_context = affect.get_state_sync()
 
-                    # Non-blocking store
-                    self._fire_and_forget(vector_mem.store(
-                        content=message,
-                        memory_type="episodic",
-                        emotional_context=emotional_context,
-                        source="user",
-                        tags=["conversation", "user_input"]
-                    ), name="vector_memory_store")
+                    # Non-blocking store — gated by substrate authority
+                    _mem_allowed = True
+                    try:
+                        _sa = ServiceContainer.get("substrate_authority", default=None)
+                        if _sa:
+                            from core.consciousness.substrate_authority import ActionCategory, AuthorizationDecision
+                            _mv = _sa.authorize(content=message[:80], source="vector_memory",
+                                                category=ActionCategory.MEMORY_WRITE, priority=0.3)
+                            if _mv.decision == AuthorizationDecision.BLOCK:
+                                _mem_allowed = False
+                                logger.debug("Vector memory store blocked by substrate authority")
+                    except Exception:
+                        pass  # fail-open for safety
+
+                    if _mem_allowed:
+                        self._fire_and_forget(vector_mem.store(
+                            content=message,
+                            memory_type="episodic",
+                            emotional_context=emotional_context,
+                            source="user",
+                            tags=["conversation", "user_input"]
+                        ), name="vector_memory_store")
             except Exception as store_err:
                 logger.debug("Semantic memory storage failed: %s", store_err)
 
@@ -254,27 +270,42 @@ class IncomingLogicMixin:
             _live_state = getattr(self.state_repo, "_current", None) if hasattr(self, "state_repo") else None
 
             # Update discourse state (topic thread, user emotional trend, conversation energy)
+            # Gated by substrate authority — internal model updates are STATE_MUTATION
+            _internal_update_allowed = True
             try:
-                discourse_tracker = ServiceContainer.get("discourse_tracker", default=None)
-                if discourse_tracker and _live_state is not None:
-                    self._fire_and_forget(
-                        discourse_tracker.update(_live_state, message),
-                        name="discourse_tracker_update",
-                    )
-            except Exception as _dt_err:
-                logger.debug("DiscourseTracker update skipped: %s", _dt_err)
+                _sa = ServiceContainer.get("substrate_authority", default=None)
+                if _sa:
+                    from core.consciousness.substrate_authority import ActionCategory, AuthorizationDecision
+                    _iv = _sa.authorize(content="internal_model_update", source="cognitive_background",
+                                        category=ActionCategory.STATE_MUTATION, priority=0.2)
+                    if _iv.decision == AuthorizationDecision.BLOCK:
+                        _internal_update_allowed = False
+                        logger.debug("Background cognitive updates blocked by substrate authority")
+            except Exception:
+                pass  # fail-open
 
-            # Update Theory of Mind user model (rapport, trust, emotional state)
-            try:
-                tom = ServiceContainer.get("theory_of_mind", default=None)
-                if tom:
-                    user_id = (getattr(self, "user_identity", {}) or {}).get("name", "bryan")
-                    self._fire_and_forget(
-                        tom.understand_user(user_id, message),
-                        name="theory_of_mind_update",
-                    )
-            except Exception as _tom_err:
-                logger.debug("TheoryOfMind update skipped: %s", _tom_err)
+            if _internal_update_allowed:
+                try:
+                    discourse_tracker = ServiceContainer.get("discourse_tracker", default=None)
+                    if discourse_tracker and _live_state is not None:
+                        self._fire_and_forget(
+                            discourse_tracker.update(_live_state, message),
+                            name="discourse_tracker_update",
+                        )
+                except Exception as _dt_err:
+                    logger.debug("DiscourseTracker update skipped: %s", _dt_err)
+
+                # Update Theory of Mind user model (rapport, trust, emotional state)
+                try:
+                    tom = ServiceContainer.get("theory_of_mind", default=None)
+                    if tom:
+                        user_id = (getattr(self, "user_identity", {}) or {}).get("name", "bryan")
+                        self._fire_and_forget(
+                            tom.understand_user(user_id, message),
+                            name="theory_of_mind_update",
+                        )
+                except Exception as _tom_err:
+                    logger.debug("TheoryOfMind update skipped: %s", _tom_err)
 
         # Initialize AutonomyGuardian if not present
         if not hasattr(self, '_autonomy_guardian'):
@@ -399,29 +430,41 @@ class IncomingLogicMixin:
                                 pathway.pathway_id, pathway.skill_name
                             )
 
-                            # Constitutional gate: hardwired paths must still pass ExecutiveCore
-                            try:
-                                from core.executive.executive_core import get_executive_core
-                                _hw_ok, _hw_reason = await get_executive_core().approve_background_task(
-                                    f"hardwired:{pathway.skill_name}",
-                                    source=f"mycelium:{pathway.pathway_id}",
+                            if not allow_direct_user_shortcut(origin):
+                                logger.info(
+                                    "🧭 [MYCELIUM] Yielding hardwired user-facing pathway '%s' to the governed runtime path",
+                                    pathway.pathway_id,
                                 )
-                                if not _hw_ok:
-                                    logger.info("🛡️ [EXECUTIVE] Hardwired '%s' blocked: %s", pathway.pathway_id, _hw_reason)
-                                    try:
-                                        from core.unified_action_log import get_action_log
-                                        get_action_log().record(pathway.skill_name, f"mycelium:{pathway.pathway_id}", "reflex", "blocked", str(_hw_reason))
-                                    except Exception as _exc:
-                                        logger.debug("Suppressed Exception: %s", _exc)
-                                    hardwired_result = None  # Fall through to deliberative path
-                                else:
-                                    try:
-                                        from core.unified_action_log import get_action_log
-                                        get_action_log().record(pathway.skill_name, f"mycelium:{pathway.pathway_id}", "reflex", "approved")
-                                    except Exception as _exc:
-                                        logger.debug("Suppressed Exception: %s", _exc)
-                            except Exception:
-                                pass  # Executive unavailable — allow reflex
+                                hardwired_result = None
+                            elif pathway.direct_response:
+                                try:
+                                    from core.constitution import get_constitutional_core
+
+                                    _emit_ok, _emit_reason, _authority_decision = await get_constitutional_core(self).approve_expression(
+                                        pathway.direct_response,
+                                        source=f"mycelium:{pathway.pathway_id}",
+                                        urgency=max(0.1, min(1.0, float(priority or 0.0))),
+                                    )
+                                    if not _emit_ok:
+                                        logger.info(
+                                            "🛡️ [AUTHORITY] Hardwired direct response '%s' blocked: %s",
+                                            pathway.pathway_id,
+                                            _emit_reason,
+                                        )
+                                        try:
+                                            from core.unified_action_log import get_action_log
+                                            get_action_log().record(
+                                                pathway.skill_name or "direct_response",
+                                                f"mycelium:{pathway.pathway_id}",
+                                                "reflex",
+                                                "blocked",
+                                                str(_emit_reason),
+                                            )
+                                        except Exception as _exc:
+                                            logger.debug("Suppressed Exception: %s", _exc)
+                                        hardwired_result = None
+                                except Exception as _exec_err:
+                                    logger.debug("Hardwired direct-response emission approval skipped: %s", _exec_err)
 
                         if hardwired_result:
                             try:
@@ -702,45 +745,43 @@ class IncomingLogicMixin:
                             else:
                                 final_response = None
 
-                            # Direct LLM fallback if CIL still not available
+                            # Governed StateMachine fallback if CIL still not available
                             if not final_response:
-                                router = self._get_service("llm_router")
-                                if router:
-                                    context = self._get_cleaned_history_context(10)
-                                    p_ctx = self._get_personality_context()
-                                    system_prompt = p_ctx if p_ctx else ""
-                                    try:
-                                        final_response = await router.think(
-                                                message,
-                                                system_prompt=system_prompt,
-                                                prefer_tier="primary",
-                                            )
-                                    except Exception as e:
-                                        logger.error("Direct LLM fallback failed: %s", e)
-                                        record_degraded_event(
-                                            "cognitive_integration",
-                                            "direct_llm_fallback_failed",
-                                            detail=f"{type(e).__name__}: {e}",
-                                            severity="error",
-                                            classification="foreground_blocking" if origin in ("user", "voice", "admin", "api") else "background_degraded",
-                                            context={"origin": origin},
-                                            exc=e,
-                                        )
-                                        final_response = await self._generate_fallback(message)
-                                else:
-                                        # Ultimate fallback: use legacy pipeline as last resort
-                                        record_degraded_event(
-                                            "cognitive_integration",
-                                            "legacy_pipeline_fallback",
-                                            detail="state_machine_execute",
-                                            severity="warning",
-                                            classification="non_critical_fallback",
-                                            context={"origin": origin},
-                                        )
-                                        intent = await self.intent_router.classify(message, payload_context)
-                                        res = await self.state_machine.execute(intent, message, payload_context, priority=priority, origin=origin)
-                                        final_response = res[0] if isinstance(res, (tuple, list)) else res
-                                        successful_tools = res[1] if isinstance(res, (tuple, list)) and len(res) > 1 else []
+                                try:
+                                    record_degraded_event(
+                                        "cognitive_integration",
+                                        "governed_state_machine_fallback",
+                                        detail="state_machine_execute",
+                                        severity="warning",
+                                        classification="non_critical_fallback",
+                                        context={"origin": origin},
+                                    )
+                                    intent = await self.intent_router.classify(message, payload_context)
+                                    res = await self.state_machine.execute(
+                                        intent,
+                                        message,
+                                        payload_context,
+                                        priority=priority,
+                                        origin=origin,
+                                    )
+                                    final_response = res[0] if isinstance(res, (tuple, list)) else res
+                                    successful_tools = res[1] if isinstance(res, (tuple, list)) and len(res) > 1 else []
+                                except Exception as e:
+                                    logger.warning("Governed StateMachine fallback failed: %s", e)
+                                    record_degraded_event(
+                                        "cognitive_integration",
+                                        "governed_state_machine_fallback_failed",
+                                        detail=f"{type(e).__name__}: {e}",
+                                        severity="warning",
+                                        classification="non_critical_fallback",
+                                        context={"origin": origin},
+                                        exc=e,
+                                    )
+                                    final_response = None
+
+                            # Raw direct LLM fallback only as the final degraded lane
+                            if not final_response:
+                                final_response = await self._generate_fallback(message)
 
                         # Phase Transcendental: Standardized Finalization
                         self._record_message_in_history(message, origin)

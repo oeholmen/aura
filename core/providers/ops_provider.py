@@ -57,6 +57,7 @@ def register_ops_services(container, is_proxy: bool = False):
     container.register('metabolic_coordinator', create_metabolic_coordinator, lifetime=ServiceLifetime.SINGLETON, required=True)
     container.register('metabolism', lambda: container.get("metabolic_coordinator"), lifetime=ServiceLifetime.SINGLETON, required=False)
 
-    # Register raw state for components that only need energy tracking
-    from core.systems.metabolism import MetabolismService
+    # Register raw state for components that only need simple energy tracking.
+    # The state service lives in core.services; core.systems contains the purge engine.
+    from core.services.metabolism import MetabolismService
     container.register('metabolism_state', lambda: MetabolismService(), lifetime=ServiceLifetime.SINGLETON, required=False)

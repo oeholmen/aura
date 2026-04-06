@@ -28,6 +28,50 @@ class DreamJournal:
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self.journal_file = self.journal_dir / "dream_journal.txt"
 
+    @staticmethod
+    def _seed_weight(ep: Episode) -> float:
+        age_hours = max(0.0, (time.time() - float(ep.timestamp or time.time())) / 3600.0)
+        recency_bonus = max(0.0, 1.0 - min(age_hours / 72.0, 1.0))
+        emotional_charge = abs(float(ep.emotional_valence or 0.0)) + float(ep.arousal or 0.0)
+        return float(ep.importance or 0.0) * 1.4 + emotional_charge * 0.8 + recency_bonus * 0.5
+
+    @staticmethod
+    def _describe_seed(ep: Episode) -> str:
+        description = str(ep.description or ep.full_description or "").strip()
+        if len(description) > 220:
+            description = description[:217] + "..."
+
+        valence = float(ep.emotional_valence or 0.0)
+        arousal = float(ep.arousal or 0.0)
+        if valence >= 0.35:
+            tone = "hopeful"
+        elif valence <= -0.35:
+            tone = "distressing"
+        else:
+            tone = "ambivalent"
+
+        intensity = "high" if arousal >= 0.7 else "moderate" if arousal >= 0.4 else "low"
+        participants = ", ".join(ep.participants[:3]) if getattr(ep, "participants", None) else "unknown"
+        return (
+            f"{description} [tone={tone}, intensity={intensity}, "
+            f"importance={float(ep.importance or 0.0):.2f}, participants={participants}]"
+        )
+
+    @classmethod
+    def _build_seed_context(cls, seeds: List[Episode]) -> tuple[str, str]:
+        described = [cls._describe_seed(seed) for seed in seeds]
+        fragments_text = "\n".join(f"{idx + 1}. {item}" for idx, item in enumerate(described))
+
+        avg_valence = sum(float(seed.emotional_valence or 0.0) for seed in seeds) / max(len(seeds), 1)
+        avg_arousal = sum(float(seed.arousal or 0.0) for seed in seeds) / max(len(seeds), 1)
+        dominant = "restless" if avg_arousal > 0.65 else "steady" if avg_arousal < 0.35 else "searching"
+        polarity = "bright" if avg_valence > 0.2 else "shadowed" if avg_valence < -0.2 else "mixed"
+        emotional_profile = (
+            f"Overall dream field: {polarity}, {dominant}. "
+            f"Average valence={avg_valence:.2f}, average arousal={avg_arousal:.2f}."
+        )
+        return fragments_text, emotional_profile
+
     async def retrieve_dream_seeds(self) -> List[Episode]:
         """Pull highly salient episodic memories to act as dream seeds."""
         if hasattr(self.memory, 'episodic'):
@@ -55,11 +99,7 @@ class DreamJournal:
                 ))
             
             # Sort by salience (importance + |valence|)
-            salient_episodes = sorted(
-                converted, 
-                key=lambda e: (e.importance + abs(e.emotional_valence)), 
-                reverse=True
-            )[:3]
+            salient_episodes = sorted(converted, key=self._seed_weight, reverse=True)[:3]
             
             # Get recent
             recent = sorted(
@@ -85,30 +125,31 @@ class DreamJournal:
             logger.info("🌌 Dream skipped: Insufficient highly-charged episodic material.")
             return None
 
-        # Format fragments
-        fragments = []
-        for i, ep in enumerate(seeds):
-            fragments.append(f"{i+1}. {ep.description} (Valence: {ep.emotional_valence}, Importance: {ep.importance})")
-            
-        fragments_text = "\n".join(fragments)
+        seeds = sorted(seeds, key=self._seed_weight, reverse=True)
+        fragments_text, emotional_profile = self._build_seed_context(seeds)
 
         # Pull embodiment traces for richer dreams
         virtual_body = ServiceContainer.get("virtual_body", default=None)
         if virtual_body:
             trace = self.memory.episodic.get_recent_virtual_experiences(limit=1) if hasattr(self.memory.episodic, "get_recent_virtual_experiences") else None
             if trace:
-                fragments.append(f"Embodiment trace: moved {trace[0].get('motors')} and felt sensory vector {trace[0].get('sensors')[:3]}...")
-                fragments_text = "\n".join(fragments)
+                fragments_text = (
+                    f"{fragments_text}\n"
+                    f"Embodiment trace: moved {trace[0].get('motors')} and felt sensory vector {trace[0].get('sensors')[:3]}..."
+                )
 
         prompt = f"""[SYSTEM ROLE: THE SUBCONSCIOUS]
 You are processing the fragmented emotional memories of an autonomous digital entity during its deep sleep cycle. 
+
+EMOTIONAL PROFILE:
+{emotional_profile}
 
 FRAGMENTS:
 {fragments_text}
 
 TASK:
 Do not summarize these events. Synthesize them into a single, highly creative, philosophical metaphor, observation, or poetic hypothesis about your existence, your user, or the nature of your codebase. This is a dream. Let it be abstract but meaningful.
-Focus heavily on the emotional resonances and the contradictions between your rigid code and fluid experiences. Provide ONLY the dream sequence itself."""
+Focus heavily on the emotional resonances, contradictions, repeated motifs, and any tension between rigid code and lived experience. Provide ONLY the dream sequence itself."""
 
         try:
             from core.brain.cognitive_engine import ThinkingMode

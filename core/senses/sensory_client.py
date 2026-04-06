@@ -17,14 +17,22 @@ class SensoryLocalClient:
         self._req_q = mp.Queue()
         self._res_q = mp.Queue()
         self._running = False
-        self._lock = asyncio.Lock()
-        self._start_lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
+        self._start_lock: Optional[asyncio.Lock] = None
+
+    def _ensure_async_locks(self) -> tuple[asyncio.Lock, asyncio.Lock]:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        if self._start_lock is None:
+            self._start_lock = asyncio.Lock()
+        return self._lock, self._start_lock
 
     async def start(self):
         """Start the isolated sensory worker."""
         from .sensory_worker import sensory_worker_loop
+        _, start_lock = self._ensure_async_locks()
 
-        async with self._start_lock:
+        async with start_lock:
             if self.is_alive():
                 logger.debug("👀 Sensory Client: Worker already alive.")
                 return True
@@ -79,7 +87,9 @@ class SensoryLocalClient:
             if not started:
                 return False
 
-        async with self._lock:
+        command_lock, _ = self._ensure_async_locks()
+
+        async with command_lock:
 
             # [STRUCTURAL UNIFICATION] Report sensory tasks to registry
             from core.supervisor.registry import get_task_registry, TaskStatus

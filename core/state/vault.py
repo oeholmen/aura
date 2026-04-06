@@ -132,10 +132,9 @@ class StateVaultActor:
     async def _update_shared_memory_async(self, state: AuraState):
         """Async wrapper for non-blocking SHM sync."""
         try:
-            # Use the repo's internal safe dict conversion in a thread
-            state_dict = await asyncio.to_thread(self.repo._circular_safe_asdict, state)
-            self.shm_transport.write(state_dict)
-            logger.debug(f"SHM Updated: Version {state.version}")
+            serialized_state = await asyncio.to_thread(self.repo._serialize, state)
+            mode = await self.repo._sync_to_shm(state, serialized_state)
+            logger.debug("SHM Updated: Version %s (%s)", state.version, mode)
         except Exception as e:
             logger.error(f"SHM Update Failed: {e}")
 

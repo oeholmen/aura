@@ -36,8 +36,8 @@ class SensoryMotorCortex:
         self.last_interaction_time = time.time()
         
         # Volition thresholds
-        self.boredom_threshold_seconds = self.config.get("boredom_threshold", 1800) # 30 mins
-        self.camera_cooldown = 120 # seconds between visual triggers (increased from 30)
+        self.boredom_threshold_seconds = self.config.get("boredom_threshold", 120)
+        self.camera_cooldown = 30 # seconds between visual triggers
         self.battery_threshold = 20 # %
         
         # Internal state

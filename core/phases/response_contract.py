@@ -65,6 +65,12 @@ _MEMORY_PATTERNS = (
 )
 
 _STATE_REFLECTION_PATTERNS = (
+    r"\bhow are you\b",
+    r"\bhow are you feeling\b",
+    r"\bhow have you been feeling\b",
+    r"\bhow are you doing\b",
+    r"\bwhat(?:'s| is) your mood\b",
+    r"\bhow do you feel right now\b",
     r"\bwho are you\b",
     r"\bwhat are you\b",
     r"\byour existence\b",
@@ -80,13 +86,20 @@ _STATE_REFLECTION_PATTERNS = (
 
 _AURA_PERSPECTIVE_PATTERNS = (
     r"\bwhat do you think\b",
+    r"\bwhat do you .*think\b",
     r"\bwhat's your take\b",
     r"\byour thoughts\b",
+    r"\byourself\b",
+    r"\babout yourself\b",
+    r"\btell me about yourself\b",
+    r"\btell me something interesting about yourself\b",
+    r"\bwhat are you like\b",
     r"\bwhy do you (?:like|love|prefer|want)\b",
     r"\bwhat do you (?:like|love|prefer|want)\b",
     r"\byour favorite\b",
     r"\babout you\b",
     r"\btell me about you\b",
+    r"\btell me directly what you make of\b",
     r"\bhow do you see\b",
 )
 
@@ -120,6 +133,7 @@ _IDENTITY_DEFENSE_PATTERNS = (
 
 @dataclass(frozen=True)
 class ResponseContract:
+    is_user_facing: bool = False
     requires_search: bool = False
     required_skill: str | None = None
     requires_memory_grounding: bool = False
@@ -136,6 +150,18 @@ class ResponseContract:
     reason: str = ""
     search_query: str = ""
 
+    def requires_live_aura_voice(self) -> bool:
+        return any(
+            (
+                self.requires_memory_grounding,
+                self.requires_state_reflection,
+                self.requires_aura_stance,
+                self.requires_aura_question,
+                self.requires_identity_defense,
+                self.requires_self_preservation,
+            )
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -143,6 +169,11 @@ class ResponseContract:
         directives = []
         reasons = self.reason or "state-derived dialogue contract"
         directives.append(f"## RESPONSE CONTRACT\n- Reason: {reasons}")
+
+        if self.is_user_facing:
+            directives.append(
+                "- This is a user-facing Aura reply. Never default to generic assistant or customer-support language."
+            )
 
         if self.requires_search:
             directives.append(
@@ -301,6 +332,7 @@ def build_response_contract(
         reasons.append("invited_aura_questions")
 
     return ResponseContract(
+        is_user_facing=is_user_facing,
         requires_search=requires_search,
         required_skill="web_search" if requires_search else None,
         requires_memory_grounding=requires_memory,

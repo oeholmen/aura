@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
+import threading
 import time
 from collections import deque
 from threading import Lock
@@ -17,6 +20,30 @@ _EVENTS: deque[Dict[str, Any]] = deque(maxlen=200)
 _SUMMARIES: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
 _LAST_FORWARDED: Dict[Tuple[str, str, str, str], float] = {}
 _LOCK = Lock()
+
+
+def _schedule_awaitable(awaitable: Any, *, label: str) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        def _runner() -> None:
+            try:
+                asyncio.run(awaitable)
+            except Exception as exc:
+                logger.debug("%s async forward failed: %s", label, exc)
+
+        threading.Thread(target=_runner, name=f"aura_{label}", daemon=True).start()
+        return
+
+    task = loop.create_task(awaitable)
+
+    def _consume_result(done: asyncio.Task) -> None:
+        try:
+            done.result()
+        except Exception as exc:
+            logger.debug("%s async forward failed: %s", label, exc)
+
+    task.add_done_callback(_consume_result)
 
 
 def record_degraded_event(
@@ -183,7 +210,7 @@ def _forward_to_error_intelligence(
         error = exc or RuntimeError(
             f"[{event['classification']}] {event['subsystem']}:{event['reason']} {event['detail']}".strip()
         )
-        self_modifier.on_error(
+        result = self_modifier.on_error(
             error,
             {
                 "subsystem": event["subsystem"],
@@ -196,5 +223,7 @@ def _forward_to_error_intelligence(
             skill_name=event["subsystem"],
             goal=event["reason"],
         )
+        if inspect.isawaitable(result):
+            _schedule_awaitable(result, label="degraded_event_forward")
     except Exception as forward_exc:
         logger.debug("Error intelligence degraded event forward failed: %s", forward_exc)

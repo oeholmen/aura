@@ -29,6 +29,20 @@ def test_no_direct_pending_initiative_appenders_remain():
             assert "state.cognition.pending_initiatives =" not in text, "research cycle still mutates initiative queue directly"
 
 
+def test_active_seeders_route_through_proposal_governance_helper():
+    targets = [
+        PROJECT_ROOT / "core" / "phases" / "initiative_generation.py",
+        PROJECT_ROOT / "core" / "phases" / "motivation_update.py",
+        PROJECT_ROOT / "core" / "consciousness" / "executive_closure.py",
+        PROJECT_ROOT / "core" / "kernel" / "upgrades_10x.py",
+    ]
+
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        assert "propose_governed_initiative_to_state(" in text, f"{path.name} bypasses proposal governance"
+        assert "get_executive_authority().propose_initiative_to_state(" not in text, f"{path.name} still calls executive authority directly"
+
+
 def test_background_seeders_do_not_bind_objectives_directly():
     text = (PROJECT_ROOT / "core" / "kernel" / "upgrades_10x.py").read_text(encoding="utf-8")
     assert 'state.cognition.current_objective = (' not in text

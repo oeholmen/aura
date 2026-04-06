@@ -7,7 +7,12 @@ build a dynamic system prompt for the Language Center.
 import asyncio
 import logging
 from typing import Optional, Dict, Any
-from core.container import ServiceContainer
+from core.runtime.service_access import (
+    optional_service,
+    resolve_conscious_substrate,
+    resolve_identity_ego_surface,
+    resolve_orchestrator,
+)
 
 logger = logging.getLogger("Brain.Compiler")
 
@@ -24,31 +29,31 @@ class PromptCompiler:
     @property
     def identity(self):
         if not self._identity:
-            self._identity = ServiceContainer.get("identity", default=None)
+            self._identity = resolve_identity_ego_surface(default=None)
         return self._identity
 
     @property
     def personality(self):
         if not self._personality:
-            self._personality = ServiceContainer.get("personality", default=None)
+            self._personality = optional_service("personality", "personality_engine", default=None)
         return self._personality
 
     @property
     def substrate(self):
         if not self._substrate:
-            self._substrate = ServiceContainer.get("conscious_substrate", default=None)
+            self._substrate = resolve_conscious_substrate(default=None)
         return self._substrate
 
     @property
     def orchestrator(self):
         if not self._orchestrator:
-            self._orchestrator = ServiceContainer.get("orchestrator", default=None)
+            self._orchestrator = resolve_orchestrator(default=None)
         return self._orchestrator
 
     @property
     def agency(self):
         if not self._agency:
-            self._agency = ServiceContainer.get("agency_core", default=None)
+            self._agency = optional_service("agency_core", default=None)
         return self._agency
 
     def compile(self, context: Optional[Dict[str, Any]] = None) -> str:
@@ -65,7 +70,10 @@ class PromptCompiler:
         
         # 2. Ego Model (Beliefs, Kinship, Values)
         if self.identity:
-            sections.append(self.identity.get_ego_prompt())
+            if hasattr(self.identity, "get_ego_prompt"):
+                sections.append(self.identity.get_ego_prompt())
+            elif hasattr(self.identity, "get_self_awareness_prompt"):
+                sections.append("### SELF AWARENESS\n" + self.identity.get_self_awareness_prompt())
         
         # 3. Affective State (Substrate & Personality)
         sections.append(self._get_affective_state())

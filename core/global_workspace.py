@@ -2,8 +2,9 @@ import asyncio
 import heapq
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 from uuid import uuid4
 
 logger = logging.getLogger("Aura.GlobalWorkspace")
@@ -17,6 +18,30 @@ class WorkItem:
     payload: Dict[str, Any] = field(compare=False)
     reason: Optional[str] = field(compare=False)
 
+
+class HistoryBuffer:
+    """Fixed-size history with deque performance and list-like slices."""
+
+    def __init__(self, maxlen: int, items: Optional[Iterable[WorkItem]] = None):
+        self.maxlen = maxlen
+        self._items = deque(items or [], maxlen=maxlen)
+
+    def append(self, item: WorkItem) -> None:
+        self._items.append(item)
+
+    def clear(self) -> None:
+        self._items.clear()
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __iter__(self) -> Iterator[WorkItem]:
+        return iter(self._items)
+
+    def __getitem__(self, index):
+        items = list(self._items)
+        return items[index]
+
 class GlobalWorkspace:
     """Central Attention Bus for Aura.
     Prioritizes and dispatches work items to subscribers.
@@ -27,10 +52,18 @@ class GlobalWorkspace:
         self._queue = []
         self._subscribers: List[Callable[[WorkItem], Any]] = []
         self._lock = asyncio.Lock()
-        self.history: List[WorkItem] = [] # Phase 16: Narrative History
         self.max_history = 500
+        self._history = HistoryBuffer(self.max_history) # Phase 16: Narrative History
         self._stop = False
         logger.info("Global Workspace initialized.")
+
+    @property
+    def history(self) -> HistoryBuffer:
+        return self._history
+
+    @history.setter
+    def history(self, value: Iterable[WorkItem]):
+        self._history = value if isinstance(value, HistoryBuffer) else HistoryBuffer(self.max_history, value)
 
     async def publish(self, priority: float, source: str, payload: Dict[str,Any], reason: Optional[str]=None):
         """Publish a new item to the workspace.
@@ -106,9 +139,7 @@ class GlobalWorkspace:
                 logger.error("Subscriber failed processing %s: %s", wi.id, e)
         
         # Phase 16: Append to history for summarization
-        self.history.append(wi)
-        if len(self.history) > self.max_history:
-            self.history.pop(0)
+        self._history.append(wi)
 
     async def run_loop(self, poll_interval: float = 0.1):
         """Main event loop for the workspace."""

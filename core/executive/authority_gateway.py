@@ -1,0 +1,664 @@
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
+
+from core.agency.capability_system import get_capability_manager
+from core.consciousness.substrate_authority import (
+    ActionCategory,
+    AuthorizationDecision,
+)
+from core.container import ServiceContainer
+from core.executive.executive_core import (
+    ActionType,
+    DecisionOutcome,
+    Intent,
+    _coerce_intent_source,
+)
+from core.runtime.organism_status import get_organism_status
+from core.runtime.service_access import optional_service, require_service
+
+logger = logging.getLogger("Aura.AuthorityGateway")
+
+
+@dataclass
+class AuthorityDecision:
+    approved: bool
+    outcome: str
+    reason: str
+    constraints: Dict[str, Any] = field(default_factory=dict)
+    executive_intent_id: Optional[str] = None
+    capability_token_id: Optional[str] = None
+    substrate_receipt_id: Optional[str] = None
+    failure_pressure: float = 0.0
+    canonical_self_version: Optional[int] = None
+
+
+class AuthorityGateway:
+    """Single narrow-waist runtime gate over substrate, executive, and tokens."""
+
+    TOOL_TOKEN_TTL_S = 900
+
+    def __init__(self) -> None:
+        self._capabilities = get_capability_manager()
+
+    async def authorize_tool_execution(
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        *,
+        source: str = "unknown",
+        priority: float = 0.7,
+        is_critical: bool = False,
+    ) -> AuthorityDecision:
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=f"tool:{tool_name} args:{str(args)[:100]}",
+            source=source,
+            category=ActionCategory.TOOL_EXECUTION,
+            priority=priority,
+            is_critical=is_critical,
+            require_substrate=False,
+        )
+        if blocked is not None:
+            return blocked
+
+        exec_core = self._get_executive_core()
+        intent, record = await exec_core.prepare_tool_intent(tool_name, args, source=source)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            token = self._capabilities.generate_token(
+                [tool_name],
+                duration_s=self.TOOL_TOKEN_TTL_S,
+            )
+            token.metadata.update(
+                {
+                    "source": source,
+                    "tool_name": tool_name,
+                    "intent_id": intent.intent_id,
+                    "substrate_receipt_id": receipt_id,
+                }
+            )
+            decision.capability_token_id = token.token_id
+        return decision
+
+    async def authorize_state_mutation(
+        self,
+        origin: str,
+        cause: str,
+        *,
+        priority: float = 0.5,
+    ) -> AuthorityDecision:
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=f"state_mutation:{cause}",
+            source=origin or "system",
+            category=ActionCategory.STATE_MUTATION,
+            priority=priority,
+            require_substrate=False,
+        )
+        if blocked is not None:
+            return blocked
+
+        intent = Intent(
+            source=_coerce_intent_source(origin or "system"),
+            goal=f"mutate_state:{origin}",
+            action_type=ActionType.MUTATE_STATE,
+            payload={"origin": origin, "cause": cause},
+            priority=priority,
+        )
+        record = await self._get_executive_core().request_approval(intent)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            self._complete_intent_safely(intent.intent_id, success=True)
+        return decision
+
+    def authorize_state_mutation_sync(
+        self,
+        origin: str,
+        cause: str,
+        *,
+        priority: float = 0.5,
+    ) -> AuthorityDecision:
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=f"state_mutation:{cause}",
+            source=origin or "system",
+            category=ActionCategory.STATE_MUTATION,
+            priority=priority,
+            require_substrate=False,
+        )
+        if blocked is not None:
+            return blocked
+
+        intent = Intent(
+            source=_coerce_intent_source(origin or "system"),
+            goal=f"mutate_state:{origin}",
+            action_type=ActionType.MUTATE_STATE,
+            payload={"origin": origin, "cause": cause},
+            priority=priority,
+        )
+        record = self._get_executive_core().request_approval_sync(intent)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            self._complete_intent_safely(intent.intent_id, success=True)
+        return decision
+
+    async def authorize_memory_write(
+        self,
+        memory_type: str,
+        content: str,
+        *,
+        source: str = "unknown",
+        importance: float = 0.5,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AuthorityDecision:
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=f"memory:{memory_type}:{str(content)[:80]}",
+            source=source or "system",
+            category=ActionCategory.MEMORY_WRITE,
+            priority=max(0.0, min(1.0, float(importance or 0.0))),
+            require_substrate=False,
+        )
+        if blocked is not None:
+            return blocked
+
+        intent = Intent(
+            source=_coerce_intent_source(source or "system"),
+            goal=f"write_memory:{memory_type}",
+            action_type=ActionType.WRITE_MEMORY,
+            payload={
+                "type": memory_type,
+                "content": str(content or "")[:200],
+                "importance": max(0.0, min(1.0, float(importance or 0.0))),
+                "metadata": dict(metadata or {}),
+            },
+            priority=max(0.0, min(1.0, float(importance or 0.0))),
+            requires_memory_commit=True,
+        )
+        record = await self._get_executive_core().request_approval(intent)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            self._complete_intent_safely(intent.intent_id, success=True)
+        return decision
+
+    def authorize_memory_write_sync(
+        self,
+        memory_type: str,
+        content: str,
+        *,
+        source: str = "unknown",
+        importance: float = 0.5,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AuthorityDecision:
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=f"memory:{memory_type}:{str(content)[:80]}",
+            source=source or "system",
+            category=ActionCategory.MEMORY_WRITE,
+            priority=max(0.0, min(1.0, float(importance or 0.0))),
+            require_substrate=False,
+        )
+        if blocked is not None:
+            return blocked
+
+        intent = Intent(
+            source=_coerce_intent_source(source or "system"),
+            goal=f"write_memory:{memory_type}",
+            action_type=ActionType.WRITE_MEMORY,
+            payload={
+                "type": memory_type,
+                "content": str(content or "")[:200],
+                "importance": max(0.0, min(1.0, float(importance or 0.0))),
+                "metadata": dict(metadata or {}),
+            },
+            priority=max(0.0, min(1.0, float(importance or 0.0))),
+            requires_memory_commit=True,
+        )
+        record = self._get_executive_core().request_approval_sync(intent)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            self._complete_intent_safely(intent.intent_id, success=True)
+        return decision
+
+    def authorize_belief_update_sync(
+        self,
+        key: str,
+        value: Any,
+        *,
+        note: Optional[str] = None,
+        source: str = "unknown",
+        priority: float = 0.7,
+    ) -> AuthorityDecision:
+        content = f"belief:{key}:{str(value)[:80]}"
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=content,
+            source=source or "system",
+            category=ActionCategory.MEMORY_WRITE,
+            priority=max(0.0, min(1.0, float(priority or 0.0))),
+            require_substrate=False,
+        )
+        if blocked is not None:
+            return blocked
+
+        intent = Intent(
+            source=_coerce_intent_source(source or "system"),
+            goal=f"update_belief:{key}",
+            action_type=ActionType.UPDATE_BELIEF,
+            payload={
+                "key": str(key or "")[:120],
+                "value": value,
+                "note": note,
+            },
+            priority=max(0.0, min(1.0, float(priority or 0.0))),
+            requires_memory_commit=True,
+        )
+        record = self._get_executive_core().request_approval_sync(intent)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            self._complete_intent_safely(intent.intent_id, success=True)
+        return decision
+
+    async def authorize_initiative(
+        self,
+        summary: str,
+        *,
+        source: str = "unknown",
+        priority: float = 0.5,
+    ) -> AuthorityDecision:
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=str(summary or "")[:240],
+            source=source or "autonomous",
+            category=ActionCategory.INITIATIVE,
+            priority=priority,
+            require_substrate=True,
+        )
+        if blocked is not None:
+            return blocked
+
+        intent = Intent(
+            source=_coerce_intent_source(source or "autonomous"),
+            goal=f"initiative:{str(summary or '')[:80]}",
+            action_type=ActionType.SPAWN_TASK,
+            payload={"summary": str(summary or "")[:240], "source": source},
+            priority=priority,
+        )
+        record = await self._get_executive_core().request_approval(intent)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            self._complete_intent_safely(intent.intent_id, success=True)
+        return decision
+
+    def authorize_initiative_sync(
+        self,
+        summary: str,
+        *,
+        source: str = "unknown",
+        priority: float = 0.5,
+    ) -> AuthorityDecision:
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=str(summary or "")[:240],
+            source=source or "autonomous",
+            category=ActionCategory.INITIATIVE,
+            priority=priority,
+            require_substrate=True,
+        )
+        if blocked is not None:
+            return blocked
+
+        intent = Intent(
+            source=_coerce_intent_source(source or "autonomous"),
+            goal=f"initiative:{str(summary or '')[:80]}",
+            action_type=ActionType.SPAWN_TASK,
+            payload={"summary": str(summary or "")[:240], "source": source},
+            priority=priority,
+        )
+        record = self._get_executive_core().request_approval_sync(intent)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            self._complete_intent_safely(intent.intent_id, success=True)
+        return decision
+
+    async def authorize_expression(
+        self,
+        content: str,
+        *,
+        source: str = "unknown",
+        urgency: float = 0.5,
+        is_critical: bool = False,
+    ) -> AuthorityDecision:
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=content[:240],
+            source=source or "system",
+            category=ActionCategory.EXPRESSION,
+            priority=urgency,
+            is_critical=is_critical,
+            require_substrate=True,
+        )
+        if blocked is not None:
+            return blocked
+
+        intent = Intent(
+            source=_coerce_intent_source(source or "autonomous"),
+            goal=f"emit_message:{content[:40]}",
+            action_type=ActionType.EMIT_MESSAGE,
+            payload={"content": content[:240], "source": source},
+            priority=urgency,
+        )
+        record = await self._get_executive_core().request_approval(intent)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            self._complete_intent_safely(intent.intent_id, success=True)
+        return decision
+
+    def authorize_expression_sync(
+        self,
+        content: str,
+        *,
+        source: str = "unknown",
+        urgency: float = 0.5,
+        is_critical: bool = False,
+    ) -> AuthorityDecision:
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=content[:240],
+            source=source or "system",
+            category=ActionCategory.EXPRESSION,
+            priority=urgency,
+            is_critical=is_critical,
+            require_substrate=True,
+        )
+        if blocked is not None:
+            return blocked
+
+        intent = Intent(
+            source=_coerce_intent_source(source or "system"),
+            goal=f"emit_message:{content[:40]}",
+            action_type=ActionType.EMIT_MESSAGE,
+            payload={"content": content[:240], "source": source},
+            priority=urgency,
+        )
+        record = self._get_executive_core().request_approval_sync(intent)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            self._complete_intent_safely(intent.intent_id, success=True)
+        return decision
+
+    async def authorize_response(
+        self,
+        content: str,
+        *,
+        source: str = "user",
+        priority: float = 0.4,
+        is_critical: bool = False,
+    ) -> AuthorityDecision:
+        blocked, substrate_constraints, receipt_id = self._substrate_preflight(
+            content=content[:240],
+            source=source or "user",
+            category=ActionCategory.RESPONSE,
+            priority=priority,
+            is_critical=is_critical,
+            require_substrate=False,
+        )
+        if blocked is not None:
+            return blocked
+
+        intent = Intent(
+            source=_coerce_intent_source(source or "user"),
+            goal=f"respond:{content[:40]}",
+            action_type=ActionType.RESPOND,
+            payload={"content": content[:240], "source": source},
+            priority=priority,
+        )
+        record = await self._get_executive_core().request_approval(intent)
+        decision = self._decision_from_record(
+            record,
+            executive_intent_id=intent.intent_id,
+            substrate_constraints=substrate_constraints,
+            substrate_receipt_id=receipt_id,
+        )
+        if decision.approved:
+            self._complete_intent_safely(intent.intent_id, success=True)
+        return decision
+
+    def verify_tool_access(self, tool_name: str, token_id: Optional[str]) -> bool:
+        return self._capabilities.verify_access(tool_name, token_id)
+
+    def finalize_tool_execution(
+        self,
+        *,
+        executive_intent_id: Optional[str] = None,
+        capability_token_id: Optional[str] = None,
+        success: bool = True,
+    ) -> None:
+        if executive_intent_id:
+            try:
+                self._get_executive_core().complete_intent(executive_intent_id, success=success)
+            except Exception as exc:
+                logger.debug("Executive intent completion skipped: %s", exc)
+        if capability_token_id:
+            try:
+                self._capabilities.revoke_token(capability_token_id)
+            except Exception as exc:
+                logger.debug("Capability token revoke skipped: %s", exc)
+
+    def _complete_intent_safely(self, intent_id: Optional[str], *, success: bool = True) -> None:
+        if not intent_id:
+            return
+        try:
+            self._get_executive_core().complete_intent(intent_id, success=success)
+        except Exception as exc:
+            logger.debug("Executive intent completion skipped: %s", exc)
+
+    def _get_executive_core(self) -> Any:
+        from core.executive import executive_core as executive_core_module
+
+        return executive_core_module.get_executive_core()
+
+    def _strict_runtime_active(self) -> bool:
+        try:
+            return (
+                ServiceContainer.has("executive_core")
+                or ServiceContainer.has("aura_kernel")
+                or ServiceContainer.has("kernel_interface")
+                or bool(getattr(ServiceContainer, "_registration_locked", False))
+            )
+        except Exception:
+            return False
+
+    def _canonical_self_version(self) -> Optional[int]:
+        organism = get_organism_status()
+        version = organism.get("canonical_self_version")
+        try:
+            return int(version) if version is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _contextualize(
+        self,
+        *,
+        approved: bool,
+        outcome: str,
+        reason: str,
+        constraints: Optional[Dict[str, Any]] = None,
+        executive_intent_id: Optional[str] = None,
+        capability_token_id: Optional[str] = None,
+        substrate_receipt_id: Optional[str] = None,
+    ) -> AuthorityDecision:
+        organism = get_organism_status()
+        return AuthorityDecision(
+            approved=approved,
+            outcome=outcome,
+            reason=reason,
+            constraints=dict(constraints or {}),
+            executive_intent_id=executive_intent_id,
+            capability_token_id=capability_token_id,
+            substrate_receipt_id=substrate_receipt_id,
+            failure_pressure=float(organism.get("failure_pressure", 0.0) or 0.0),
+            canonical_self_version=self._canonical_self_version(),
+        )
+
+    def _decision_from_record(
+        self,
+        record: Any,
+        *,
+        executive_intent_id: Optional[str] = None,
+        substrate_constraints: Optional[Dict[str, Any]] = None,
+        substrate_receipt_id: Optional[str] = None,
+    ) -> AuthorityDecision:
+        raw_outcome = getattr(record, "outcome", DecisionOutcome.REJECTED)
+        outcome = getattr(raw_outcome, "value", str(raw_outcome or DecisionOutcome.REJECTED.value))
+        approved = outcome in (DecisionOutcome.APPROVED.value, DecisionOutcome.DEGRADED.value)
+        constraints = dict(getattr(record, "constraints", {}) or {})
+        if substrate_constraints:
+            constraints.update(substrate_constraints)
+            if outcome == DecisionOutcome.APPROVED.value:
+                outcome = DecisionOutcome.DEGRADED.value
+        return self._contextualize(
+            approved=approved,
+            outcome=outcome,
+            reason=str(getattr(record, "reason", "") or ""),
+            constraints=constraints,
+            executive_intent_id=executive_intent_id,
+            substrate_receipt_id=substrate_receipt_id,
+        )
+
+    def _substrate_preflight(
+        self,
+        *,
+        content: str,
+        source: str,
+        category: ActionCategory,
+        priority: float,
+        is_critical: bool = False,
+        require_substrate: bool = False,
+    ) -> tuple[Optional[AuthorityDecision], Dict[str, Any], Optional[str]]:
+        authority = None
+        require_substrate = bool(require_substrate and self._strict_runtime_active())
+        try:
+            if require_substrate:
+                authority = require_service("substrate_authority")
+            else:
+                authority = optional_service("substrate_authority", default=None)
+        except Exception as exc:
+            return (
+                self._contextualize(
+                    approved=False,
+                    outcome="rejected",
+                    reason=f"substrate_authority_required:{type(exc).__name__}",
+                    constraints={"blocked": True},
+                ),
+                {},
+                None,
+            )
+
+        if authority is None:
+            return None, {}, None
+
+        try:
+            verdict = authority.authorize(
+                content=content,
+                source=source,
+                category=category,
+                priority=priority,
+                is_critical=is_critical,
+            )
+        except Exception as exc:
+            if require_substrate:
+                return (
+                    self._contextualize(
+                        approved=False,
+                        outcome="rejected",
+                        reason=f"substrate_gate_failed:{type(exc).__name__}",
+                        constraints={"blocked": True},
+                    ),
+                    {},
+                    None,
+                )
+            logger.debug("Substrate preflight skipped for %s: %s", category.name, exc)
+            return None, {}, None
+
+        if verdict.decision == AuthorizationDecision.BLOCK:
+            return (
+                self._contextualize(
+                    approved=False,
+                    outcome="rejected",
+                    reason=f"substrate_blocked:{verdict.reason}",
+                    constraints={
+                        "blocked": True,
+                        "substrate_constraints": list(verdict.constraints or []),
+                    },
+                    substrate_receipt_id=verdict.receipt_id,
+                ),
+                {},
+                verdict.receipt_id,
+            )
+
+        constraints: Dict[str, Any] = {}
+        if verdict.decision == AuthorizationDecision.CONSTRAIN:
+            constraints["substrate_constrained"] = True
+            constraints["substrate_constraints"] = list(verdict.constraints or [])
+        elif verdict.decision == AuthorizationDecision.CRITICAL_PASS:
+            constraints["substrate_critical_pass"] = True
+
+        return None, constraints, verdict.receipt_id
+
+
+_instance: Optional[AuthorityGateway] = None
+
+
+def get_authority_gateway() -> AuthorityGateway:
+    global _instance
+    if _instance is None:
+        _instance = AuthorityGateway()
+        try:
+            ServiceContainer.register_instance("authority_gateway", _instance, required=False)
+        except Exception as exc:
+            logger.debug("AuthorityGateway registration skipped: %s", exc)
+    return _instance

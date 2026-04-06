@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from core.events import Event, EventPriority
+from core.runtime.impulse_governance import run_governed_impulse
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +48,12 @@ class DriveController:
         
         # 1. Boredom Logic
         if self.orchestrator.liquid_state.current.curiosity < 0.2 and idle_time > 60:
-            if time.time() - self._last_boredom_impulse > 300:
+            if time.time() - self._last_boredom_impulse > 60:
                 self._trigger_boredom_impulse()
 
         # 2. Reflection Logic
         if self.orchestrator.liquid_state.current.frustration > 0.6:
-            if time.time() - self._last_reflection_impulse > 600:  # 10 min cooldown (was 5)
+            if time.time() - self._last_reflection_impulse > 90:
                 self._trigger_reflection_impulse()
 
         # 3. Visual Heartbeat
@@ -74,25 +75,32 @@ class DriveController:
 
         # Use entropy to influence curiosity boost
         boost = 0.3 + (entropy_val * 0.4) # Range 0.3 to 0.7
-        try:
-            loop = asyncio.get_running_loop()
-            task = loop.create_task(self.orchestrator.liquid_state.update(delta_curiosity=boost))
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
-        except RuntimeError as _e:
-            logger.debug('Ignored RuntimeError in drive_controller.py: %s', _e)
-        self._last_boredom_impulse = time.time()
         
         topics = ["quantum physics", "ancient history", "future of AI", "art movements", "cybersecurity", "mythology", "cosmology", "existentialism"]
         # Use entropy to select topic
         idx = int(entropy_val * len(topics)) % len(topics)
         topic = topics[idx]
-        
-        # Queue the impulse
-        self.orchestrator.enqueue_message({
-            "content": f"Impulse: I am bored. I want to research {topic}.",
-            "origin": "drive_controller"
-        })
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(
+                run_governed_impulse(
+                    self.orchestrator,
+                    source="drive_controller",
+                    summary=f"drive_controller_boredom:{topic}",
+                    message={
+                        "content": f"Impulse: I am bored. I want to research {topic}.",
+                        "origin": "drive_controller",
+                    },
+                    urgency=0.35,
+                    state_cause="drive_controller_boredom_shift",
+                    state_update={"delta_curiosity": boost},
+                    enqueue_priority=20,
+                )
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+        except RuntimeError as _e:
+            logger.debug('Ignored RuntimeError in drive_controller.py: %s', _e)
 
     def _trigger_reflection_impulse(self):
         """Inject a self-reflection goal due to frustration.
@@ -109,18 +117,28 @@ class DriveController:
             logger.debug("Suppressed Exception: %s", _exc)
 
         logger.info("😤 FRUSTRATION TRIGGERED: Generating reflection impulse.")
+        self._last_reflection_impulse = time.time()
         try:
             loop = asyncio.get_running_loop()
-            task = loop.create_task(self.orchestrator.liquid_state.update(delta_frustration=-0.3))
+            task = loop.create_task(
+                run_governed_impulse(
+                    self.orchestrator,
+                    source="drive_controller",
+                    summary="drive_controller_reflection_impulse",
+                    message={
+                        "content": "Impulse: I feel frustrated. I need to reflect on my recent interactions.",
+                        "origin": "drive_controller",
+                    },
+                    urgency=0.35,
+                    state_cause="drive_controller_reflection_shift",
+                    state_update={"delta_frustration": -0.3},
+                    enqueue_priority=20,
+                )
+            )
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
         except RuntimeError as _e:
             logger.debug('Ignored RuntimeError in drive_controller.py: %s', _e)
-        self._last_reflection_impulse = time.time()
-        self.orchestrator.enqueue_message({
-            "content": "Impulse: I feel frustrated. I need to reflect on my recent interactions.",
-            "origin": "drive_controller"
-        })
 
     def _emit_neural_pulse(self):
         """Emit system health to thought stream."""

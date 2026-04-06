@@ -138,9 +138,11 @@ class MemoryConsolidationPhase(BasePhase):
         pruner = self.container.get("sovereign_pruner", default=None)
         if pruner:
             # v40: Dynamic weight from affect
-            # High arousal + low valence = high emotional weight (friction/distress)
-            # High arousal + high valence = high emotional weight (excitement/joy)
-            emotional_weight = min(1.0, new_state.affect.arousal * (1.1 - abs(new_state.affect.valence)))
+            # High arousal plus strong valence at either pole should preserve
+            # memories more aggressively than neutral-but-busy states.
+            arousal = max(0.0, float(getattr(new_state.affect, "arousal", 0.0) or 0.0))
+            valence_magnitude = abs(float(getattr(new_state.affect, "valence", 0.0) or 0.0))
+            emotional_weight = min(1.0, arousal * (0.6 + 0.5 * valence_magnitude))
             
             # Convert dicts to MemoryRecords for the pruner
             from core.memory.sovereign_pruner import MemoryRecord

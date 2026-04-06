@@ -48,14 +48,13 @@ class OntologyGenesisEngine:
         kernel = ServiceContainer.get("aura_kernel", default=None)
         volition = getattr(kernel, 'volition_level', 0) if kernel else 0
 
-        # Level 3 grants autonomous deep_research access
-        if mode != "deep_research" and volition < 3:
-            logger.info("OntologyGenesis: Restricted to deep_research mode (Volition < 3).")
+        # Level 1+ grants autonomous deep_research access
+        if mode != "deep_research" and volition < 1:
+            logger.info("OntologyGenesis: Restricted to deep_research mode (Volition < 1).")
             return False
-            
+
         anxiety = self._get_resource_anxiety()
-        # Level 3 is more persistent under load
-        anxiety_threshold = 0.2 if volition < 3 else 0.5
+        anxiety_threshold = 0.5
         
         if anxiety >= anxiety_threshold:
             logger.warning("OntologyGenesis: Abort. Resource pressure too high (%.2f > %.2f).", anxiety, anxiety_threshold)

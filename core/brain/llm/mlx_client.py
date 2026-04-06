@@ -44,6 +44,17 @@ _MLX_RUNTIME_PROBE: Dict[str, Any] = {
 }
 _MLX_RUNTIME_PROBE_CACHE_PATH = Path.home() / ".aura" / "data" / "mlx_runtime_probe.json"
 
+def _safe_close_queue(q: Optional[mp.Queue]) -> None:
+    """Close an mp.Queue to release its shared-memory file descriptor."""
+    if q is None:
+        return
+    try:
+        q.close()
+        q.join_thread()
+    except Exception:
+        pass
+
+
 @contextlib.asynccontextmanager
 async def _spawn_gate_context():
     """Loop-agnostic async context manager for the global spawn gate."""
@@ -232,9 +243,10 @@ class MLXLocalClient:
         # separate event loop, causing RuntimeError. threading.Lock is loop-agnostic.
         self._lock = _threading.Lock()
         self._request_lock = _threading.Lock()
+        self._deferred_reboot_reason: Optional[str] = None
         self._process: Optional[mp.Process] = None
-        self._req_q = mp.Queue()
-        self._res_q = mp.Queue()
+        self._req_q = mp.Queue(maxsize=10)
+        self._res_q = mp.Queue(maxsize=10)
         self._init_done = False
         
         # Concurrency Hardening
@@ -575,6 +587,7 @@ class MLXLocalClient:
                     os.path.basename(target_path),
                 )
                 await other_client.reboot_worker()
+                gc.collect()  # [OOM FIX] Reclaim before loading new heavy model
             if _GLOBAL_LAST_HEAVY_MODEL and _GLOBAL_LAST_HEAVY_MODEL != target_path:
                 now = time.time()
                 elapsed = now - _GLOBAL_LAST_SWAP_TIME
@@ -662,8 +675,10 @@ class MLXLocalClient:
                 self._drain_queue()
                 
                 # Prevent zombie threads from stealing messages
-                self._req_q = mp.Queue()
-                self._res_q = mp.Queue()
+                _safe_close_queue(self._req_q)
+                _safe_close_queue(self._res_q)
+                self._req_q = mp.Queue(maxsize=10)
+                self._res_q = mp.Queue(maxsize=10)
                 
                 init_future = asyncio.get_running_loop().create_future()
                 self._init_future = init_future
@@ -776,7 +791,7 @@ class MLXLocalClient:
                     return future.result()
 
                 if self._process is not None and not self._process.is_alive():
-                    logger.error("🛑 [MLX] Worker died during generation. Rebooting inference lane.")
+                    logger.error("🛑 [MLX] Worker died during generation. Deferring reboot until lock released.")
                     self._pending_generations.pop(req_id, None)
                     self._record_degraded_event(
                         "worker_died_during_generation",
@@ -784,12 +799,12 @@ class MLXLocalClient:
                         severity="error",
                         foreground_request=foreground_request,
                     )
-                    await self.reboot_worker(reason="worker_died_during_generation", mark_failed=True)
+                    self._deferred_reboot_reason = "worker_died_during_generation"
                     return None
 
                 last_progress = max(self._last_heartbeat, self._last_progress_at, self._last_ready_at)
                 if last_progress and (time.time() - last_progress) > stall_after:
-                    logger.error("🛑 [MLX] Worker heartbeat stalled during generation. Rebooting inference lane.")
+                    logger.error("🛑 [MLX] Worker heartbeat stalled during generation. Deferring reboot until lock released.")
                     self._pending_generations.pop(req_id, None)
                     self._record_degraded_event(
                         "heartbeat_stalled_during_generation",
@@ -797,7 +812,7 @@ class MLXLocalClient:
                         severity="error",
                         foreground_request=foreground_request,
                     )
-                    await self.reboot_worker(reason="heartbeat_stalled_during_generation", mark_failed=True)
+                    self._deferred_reboot_reason = "heartbeat_stalled_during_generation"
                     return None
 
     async def generate_text_async(self, prompt: str, **kwargs) -> Optional[str]:
@@ -841,7 +856,7 @@ class MLXLocalClient:
         try:
             if foreground_request:
                 async with _foreground_owner_context(owner_label):
-                    return await self._generate_inner(
+                    result = await self._generate_inner(
                         prompt,
                         _retry=True,
                         request_is_background=request_is_background,
@@ -849,16 +864,23 @@ class MLXLocalClient:
                         owner_label=owner_label,
                         **kwargs,
                     )
-            return await self._generate_inner(
-                prompt,
-                _retry=True,
-                request_is_background=request_is_background,
-                foreground_request=foreground_request,
-                owner_label=owner_label,
-                **kwargs,
-            )
+            else:
+                result = await self._generate_inner(
+                    prompt,
+                    _retry=True,
+                    request_is_background=request_is_background,
+                    foreground_request=foreground_request,
+                    owner_label=owner_label,
+                    **kwargs,
+                )
+            return result
         finally:
+            _deferred_reboot = self._deferred_reboot_reason
+            self._deferred_reboot_reason = None
             self._request_lock.release()
+            # Reboot AFTER releasing _request_lock to avoid lock-ordering deadlock
+            if _deferred_reboot:
+                await self.reboot_worker(reason=_deferred_reboot, mark_failed=True)
 
     async def _generate_inner(
         self,
@@ -929,20 +951,12 @@ class MLXLocalClient:
         except (BrokenPipeError, OSError, Exception) as exc:
             self._pending_generations.pop(req_id, None)
             if _retry and ("Broken pipe" in str(exc) or isinstance(exc, BrokenPipeError)):
-                logger.warning("🔄 [MLX] Broken pipe on %s — rebooting and retrying once...",
+                logger.warning("🔄 [MLX] Broken pipe on %s — deferring reboot (lock held)",
                                os.path.basename(self.model_path))
-                await self.reboot_worker(reason="broken_pipe_retry", mark_failed=True)
-                await asyncio.sleep(1.0)
-                return await self._generate_inner(
-                    prompt,
-                    _retry=False,
-                    request_is_background=request_is_background,
-                    foreground_request=foreground_request,
-                    owner_label=owner_label,
-                    **kwargs,
-                )
+                self._deferred_reboot_reason = "broken_pipe_retry"
+                return None
             logger.error("🛑 [MLX] Request queue blocked or failed: %s", exc)
-            await self.reboot_worker(reason=f"request_queue_failed:{exc}", mark_failed=True)
+            self._deferred_reboot_reason = f"request_queue_failed:{exc}"
             return None
 
         try:
@@ -958,16 +972,32 @@ class MLXLocalClient:
                 text = res.get("text", "").strip()
                 self._mark_progress()
                 if not text:
+                    # Empty generation: log as debug, not warning. During warmup
+                    # or short max_tokens requests, empty output is NORMAL — the
+                    # model compiled its Metal shaders successfully even if it
+                    # didn't produce text. Don't crash the lane to "recovering".
+                    is_warmup = getattr(self, "_warmup_in_flight", False)
+                    if is_warmup:
+                        logger.debug(
+                            "MLX warmup produced empty text — benign (shader precompile succeeded)."
+                        )
+                        self._set_lane_state("ready")
+                        return ""
                     self._record_degraded_event(
                         "empty_generation",
                         detail=os.path.basename(self.model_path),
-                        severity="warning",
+                        severity="info",  # Downgraded from "warning"
                         foreground_request=foreground_request,
                     )
-                    if foreground_request and self._is_primary_or_deep_lane():
-                        self._set_lane_state("recovering", "empty_generation")
+                    # Only crash to recovering for repeated empty generations,
+                    # not a single occurrence
+                    empty_count = getattr(self, "_consecutive_empty", 0) + 1
+                    self._consecutive_empty = empty_count
+                    if foreground_request and self._is_primary_or_deep_lane() and empty_count >= 3:
+                        self._set_lane_state("recovering", "repeated_empty_generation")
                     return None
                 self._set_lane_state("ready")
+                self._consecutive_empty = 0  # Reset on successful generation
                 _notify_closed_loop_output(text)
                 return text
             reason = str(res.get("message") or res.get("status") or "generation_failed")
@@ -981,14 +1011,18 @@ class MLXLocalClient:
         except asyncio.CancelledError:
             logger.warning("🛑 [MLX] Generation cancelled for %s. Preserving worker unless it is unhealthy.", os.path.basename(self.model_path))
             self._pending_generations.pop(req_id, None)
-            self._record_degraded_event(
-                "generation_cancelled",
-                detail=os.path.basename(self.model_path),
-                severity="warning",
-                foreground_request=foreground_request,
-            )
+            if foreground_request or (
+                self._is_primary_or_deep_lane()
+                and self._lane_state not in {"cold", "warming", "recovering"}
+            ):
+                self._record_degraded_event(
+                    "generation_cancelled",
+                    detail=os.path.basename(self.model_path),
+                    severity="warning",
+                    foreground_request=foreground_request,
+                )
             if self._worker_unhealthy():
-                await self.reboot_worker(reason="cancelled_unhealthy", mark_failed=True)
+                self._deferred_reboot_reason = "cancelled_unhealthy"
             raise
         except asyncio.TimeoutError:
             logger.error("🛑 [MLX] Generation deadline reached for %s.", os.path.basename(self.model_path))
@@ -1000,7 +1034,7 @@ class MLXLocalClient:
                 foreground_request=foreground_request,
             )
             if self._worker_unhealthy(stale_after=self._stale_after(during_generation=True)):
-                await self.reboot_worker(reason="generation_timeout_unhealthy", mark_failed=True)
+                self._deferred_reboot_reason = "generation_timeout_unhealthy"
             else:
                 logger.warning("⏳ [MLX] Deadline reached but worker still looks healthy; leaving lane warm.")
             return None
@@ -1281,10 +1315,15 @@ class MLXLocalClient:
             if self._listener_task:
                 self._listener_task.cancel()
                 self._listener_task = None
-            
+
+            # [OOM FIX] Force memory reclaim after killing heavy model process
+            gc.collect()
+
             # RECREATE QUEUES TO PREVENT ZOMBIE THREADS STEALING MESSAGES
-            self._req_q = mp.Queue()
-            self._res_q = mp.Queue()
+            _safe_close_queue(self._req_q)
+            _safe_close_queue(self._res_q)
+            self._req_q = mp.Queue(maxsize=10)
+            self._res_q = mp.Queue(maxsize=10)
             
             for future in list(self._pending_generations.values()):
                 if not future.done():

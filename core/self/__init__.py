@@ -1,1 +1,3 @@
-from .self_model import SelfModel
+from core.self_model import SelfModel
+
+__all__ = ["SelfModel"]

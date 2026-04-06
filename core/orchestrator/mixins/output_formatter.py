@@ -54,7 +54,12 @@ class OutputFormatterMixin:
             try:
                 filtered = pe.filter_response(text)
                 if isinstance(filtered, str):
-                    return filtered
+                    text = filtered
+                if hasattr(pe, "apply_lexical_style"):
+                    styled = pe.apply_lexical_style(text)
+                    if isinstance(styled, str):
+                        text = styled
+                return text
                 if inspect.isawaitable(filtered):
                     _dispose_awaitable(filtered)
             except Exception as exc:

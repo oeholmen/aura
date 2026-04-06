@@ -6,9 +6,10 @@ import psutil
 from typing import Optional, TYPE_CHECKING
 from core.kernel.bridge import Phase
 from core.state.aura_state import AuraState
-from core.consciousness.executive_authority import get_executive_authority
+from core.consciousness.executive_authority import get_executive_authority as get_executive_authority
 from core.container import ServiceContainer
 from core.runtime.background_policy import background_activity_allowed
+from core.runtime.proposal_governance import propose_governed_initiative_to_state
 
 if TYPE_CHECKING:
     from core.kernel.aura_kernel import AuraKernel
@@ -92,9 +93,10 @@ class MotivationUpdatePhase(Phase):
             intention = self._assess_needs(next_state)
             if intention:
                 logger.info(f"✨ Motivation Phase: Generated Intention -> {intention['goal']}")
-                next_state, decision = await get_executive_authority().propose_initiative_to_state(
+                next_state, decision = await propose_governed_initiative_to_state(
                     next_state,
                     intention["goal"],
+                    orchestrator=None,
                     source="motivation_update",
                     kind="motivational_drive",
                     urgency=float(intention.get("urgency", 0.5) or 0.5),
@@ -105,9 +107,10 @@ class MotivationUpdatePhase(Phase):
                 
         # 3. Spontaneity (Curiosity Spikes)
         if random.random() < 0.01 and _background_curiosity_allowed(): # Lower frequency per tick
-             next_state, decision = await get_executive_authority().propose_initiative_to_state(
+             next_state, decision = await propose_governed_initiative_to_state(
                  next_state,
                  "Spontaneous curiosity spike: Exploring latent interests.",
+                 orchestrator=None,
                  source="motivation_update",
                  kind="curiosity_spike",
                  urgency=0.5,

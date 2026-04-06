@@ -140,6 +140,10 @@ class AuraKernel:
             self,
             include_executive_closure=True,
         )
+        # The shared legacy bootstrap wires many common phases, but the response
+        # phase must remain the unitary implementation used by the sovereign
+        # kernel path rather than the older compatibility generator.
+        self.response_phase = UnitaryResponsePhase(self)
 
         # Feedback Observer
         self.feedback_observer = FeedbackObserver()
@@ -604,11 +608,11 @@ class AuraKernel:
                 # Level 1: Reflective (Adds Self-Review)
                 # Level 2: Perceptive (Adds Learning/Repair)
                 # Level 3: Agentic (Adds Growth/Evolution)
-                if volition < 3 and phase_name in ("EternalGrowthEngine", "TrueEvolutionPhase"):
+                if volition < 3 and isinstance(phase, (EternalGrowthEngine, TrueEvolutionPhase)):
                     continue
-                if volition < 2 and phase_name in ("LearningPhase", "RepairPhase", "BondingPhase"):
+                if volition < 2 and isinstance(phase, (LearningPhase, RepairPhase, BondingPhase)):
                     continue
-                if volition < 1 and phase_name in ("SelfReviewPhase",):
+                if volition < 1 and isinstance(phase, SelfReviewPhase):
                     continue
 
                 # Strict Lineage: Each phase execution derives a new state version.
@@ -654,8 +658,10 @@ class AuraKernel:
                             break
                         # Let the shielded task finish in the background; do not cancel it.
                         continue
-                except Exception:
-                    raise
+                except Exception as phase_err:
+                    logger.error("🔥 Phase '%s' raised unexpected error: %s", phase_name, phase_err, exc_info=True)
+                    # Don't let a single phase crash the entire tick — skip and continue
+                    continue
 
                 if self.state is None:
                      raise RuntimeError(f"Phase {phase_name} returned None state")
@@ -777,7 +783,11 @@ class AuraKernel:
 
     async def _commit_vault(self, objective: str):
         """Atomically persists the Monolithic state."""
-        await self.vault.commit(self.state, self.state.transition_cause or f"tick: {objective}")
+        commit = getattr(self.vault, "commit", None)
+        if callable(commit):
+            await commit(self.state, self.state.transition_cause or f"tick: {objective}")
+        else:
+            logger.debug("Vault has no commit method — skipping persistence.")
 
     async def _process_storage_intents(self):
         """
@@ -801,8 +811,9 @@ class AuraKernel:
                 if t == "db_write":
                     # vASI: Direct Vault commitment for intentional state shifts
                     cause = intent.get("cause", "autonomous_intent")
-                    if self.vault and self.state:
-                        await self.vault.commit(self.state, cause=cause)
+                    commit = getattr(self.vault, "commit", None)
+                    if callable(commit) and self.state:
+                        await commit(self.state, cause=cause)
                 elif t == "eternal_append":
                     path = intent.get("path")
                     payload = intent.get("payload")

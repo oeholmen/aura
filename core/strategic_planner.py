@@ -52,30 +52,12 @@ Return the response as a valid JSON object with the following structure:
             # Robust parsing (handle quotes and trailing commas)
             plan_data = json.loads(content)
             
-            # 2. Create Project and tasks atomically
-            with self.store.transaction() as conn:
-                project = self.store.create_project(
-                    name=plan_data.get("project_name", "New Project"),
-                    goal=goal_text,
-                    conn=conn
-                )
-                self.active_project_id = project.id
-                
-                # 3. Add Tasks with calculated priorities
-                tasks = plan_data.get("tasks", [])
-                for i, task_info in enumerate(tasks):
-                    # Ensure priority is descending unless explicitly provided
-                    base_priority = task_info.get("priority")
-                    if base_priority is None:
-                        base_priority = len(tasks) - i
-                    
-                    self.store.add_task(
-                        project_id=project.id,
-                        description=task_info.get("description", "Untitled Task"),
-                        priority=base_priority,
-                        metadata={"index": i, "strategic_intent": True},
-                        conn=conn
-                    )
+            project, tasks = await asyncio.to_thread(
+                self._persist_plan_sync,
+                goal_text,
+                plan_data,
+            )
+            self.active_project_id = project.id
                 
             logger.info("🎯 Strategic Plan Accepted: '%s' (%d components)", project.name, len(tasks))
             
@@ -90,6 +72,28 @@ Return the response as a valid JSON object with the following structure:
         except Exception as e:
             logger.error("🚫 Strategic scaling failure: %s", e)
             return None
+
+    def _persist_plan_sync(self, goal_text: str, plan_data: Dict[str, Any]) -> tuple[Project, List[Dict[str, Any]]]:
+        tasks = list(plan_data.get("tasks", []) or [])
+        with self.store.transaction() as conn:
+            project = self.store.create_project(
+                name=plan_data.get("project_name", "New Project"),
+                goal=goal_text,
+                conn=conn,
+            )
+            for i, task_info in enumerate(tasks):
+                base_priority = task_info.get("priority")
+                if base_priority is None:
+                    base_priority = len(tasks) - i
+
+                self.store.add_task(
+                    project_id=project.id,
+                    description=task_info.get("description", "Untitled Task"),
+                    priority=base_priority,
+                    metadata={"index": i, "strategic_intent": True},
+                    conn=conn,
+                )
+        return project, tasks
 
     def get_next_task(self, project_id: Optional[str] = None) -> Optional[StrategicTask]:
         """Retrieve the next pending task for the specified project (or first active)."""
@@ -152,22 +156,13 @@ Return as JSON as before:
             
             plan_data = json.loads(content)
             
-            # Wrapper for atomic updates
-            with self.store.transaction() as conn:
-                # 1. Archive previous pending tasks
-                for t in pending:
-                    self.store.update_task_status(t.id, "archived", {"reason": "Replanned due to failure"}, conn=conn)
-                
-                # 2. Add new tasks
-                new_tasks = plan_data.get("tasks", [])
-                for i, task_info in enumerate(new_tasks):
-                    self.store.add_task(
-                        project_id=project_id,
-                        description=task_info.get("description"),
-                        priority=len(new_tasks) - i + 10, # Give them higher priority than original
-                        metadata={"replanned": True, "reason": reason},
-                        conn=conn
-                    )
+            new_tasks = await asyncio.to_thread(
+                self._replan_project_sync,
+                project_id,
+                pending,
+                reason,
+                plan_data,
+            )
             
             feed = ServiceContainer.get("neural_feed", default=None)
             if feed:
@@ -177,6 +172,33 @@ Return as JSON as before:
         except Exception as e:
             logger.error("Failed to replan project: %s", e, exc_info=True)
             return False
+
+    def _replan_project_sync(
+        self,
+        project_id: str,
+        pending: List[StrategicTask],
+        reason: str,
+        plan_data: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        new_tasks = list(plan_data.get("tasks", []) or [])
+        with self.store.transaction() as conn:
+            for task in pending:
+                self.store.update_task_status(
+                    task.id,
+                    "archived",
+                    {"reason": "Replanned due to failure"},
+                    conn=conn,
+                )
+
+            for i, task_info in enumerate(new_tasks):
+                self.store.add_task(
+                    project_id=project_id,
+                    description=task_info.get("description"),
+                    priority=len(new_tasks) - i + 10,
+                    metadata={"replanned": True, "reason": reason},
+                    conn=conn,
+                )
+        return new_tasks
 
     async def get_project_status_report(self, project_id: str) -> str:
         """Generate a human-readable status report for a project."""

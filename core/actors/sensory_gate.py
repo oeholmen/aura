@@ -81,41 +81,41 @@ class SensoryGateActor:
             return {"error": str(e)}
 
     async def _handle_search(self, payload: Dict, trace_id: str):
-        """Handle search request via Live Wikipedia OpenSearch API."""
+        """Handle search request via Wikipedia OpenSearch API."""
         import urllib.parse
         import urllib.request
         import json
-        
+
         query = payload.get("query")
         if not query:
             return {"error": "No query provided"}
-        
-        logger.info("🔍 [%s] Searching Knowledge Base (Wikipedia): %s", trace_id[:8], query)
+
+        logger.info("🔍 [%s] Wikipedia search: %s", trace_id[:8], query)
         try:
             url = f"https://en.wikipedia.org/w/api.php?action=opensearch&search={urllib.parse.quote(query)}&limit=3&namespace=0&format=json"
-            
+
             def fetch():
-                req = urllib.request.Request(url, headers={'User-Agent': 'AuraContextBuilder/1.0'})
+                req = urllib.request.Request(url, headers={'User-Agent': 'Aura/1.0'})
                 with urllib.request.urlopen(req, timeout=5) as response:
                     return json.loads(response.read().decode())
-                    
+
             data = await asyncio.to_thread(fetch)
-            
+
             if len(data) >= 4 and len(data[1]) > 0:
                 titles = data[1]
                 snippets = data[2]
                 urls = data[3]
-                
+
                 results = []
                 for i in range(len(titles)):
                     results.append(f"{titles[i]}: {snippets[i]} ({urls[i]})")
-                    
-                return {"query": query, "results": results}
+
+                return {"query": query, "source": "wikipedia", "results": results}
             else:
-                return {"query": query, "results": ["No reliable external knowledge found for query."]}
-                
+                return {"query": query, "source": "wikipedia", "results": []}
+
         except Exception as e:
-            logger.error("❌ [%s] Search failed: %s", trace_id[:8], e)
+            logger.error("❌ [%s] Wikipedia search failed: %s", trace_id[:8], e)
             return {"error": str(e)}
 
     async def _handle_shutdown(self, payload: Any, trace_id: str):

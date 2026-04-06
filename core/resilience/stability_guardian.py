@@ -516,16 +516,21 @@ class StabilityGuardian:
 
     async def _check_state_repository_pressure(self) -> HealthCheckResult:
         try:
-            from core.container import ServiceContainer
+            from core.runtime.service_access import resolve_state_repository
 
-            repo = ServiceContainer.get("state_repository", default=None)
+            repo = resolve_state_repository(self.orchestrator, default=None)
             if repo is None or not hasattr(repo, "get_runtime_status"):
                 return HealthCheckResult("state_repository", True, "State repository runtime status unavailable", "info")
 
             status = repo.get_runtime_status()
+            is_vault_owner = bool(status.get("is_vault_owner", False))
             queue_depth = int(status.get("queue_depth", 0) or 0)
             queue_max = int(status.get("queue_maxsize", 0) or 0)
             consumer_alive = bool(status.get("consumer_alive", False))
+            local_consumer_alive = bool(status.get("local_consumer_alive", consumer_alive))
+            shm_attached = bool(status.get("shm_attached", False))
+            state_available = bool(status.get("state_available", False))
+            vault_transport_available = bool(status.get("vault_transport_available", False))
             actions = []
 
             if hasattr(repo, "repair_runtime") and self._repair_allowed("state_repository_repair", 30.0) and (
@@ -534,15 +539,32 @@ class StabilityGuardian:
             ):
                 repair = await repo.repair_runtime()
                 status = repair.get("status", status)
+                is_vault_owner = bool(status.get("is_vault_owner", is_vault_owner))
                 queue_depth = int(status.get("queue_depth", queue_depth) or queue_depth)
                 consumer_alive = bool(status.get("consumer_alive", consumer_alive))
+                local_consumer_alive = bool(status.get("local_consumer_alive", local_consumer_alive))
+                shm_attached = bool(status.get("shm_attached", shm_attached))
+                state_available = bool(status.get("state_available", state_available))
+                vault_transport_available = bool(status.get("vault_transport_available", vault_transport_available))
                 actions = list(repair.get("actions", []) or [])
 
             if not consumer_alive:
+                if not is_vault_owner:
+                    return HealthCheckResult(
+                        "state_repository",
+                        False,
+                        (
+                            "State proxy is not hydrated "
+                            f"(state_available={state_available}, shm_attached={shm_attached}, "
+                            f"vault_transport_available={vault_transport_available})"
+                        ),
+                        severity="error",
+                        action_taken=", ".join(actions) or None,
+                    )
                 return HealthCheckResult(
                     "state_repository",
                     False,
-                    f"Vault consumer not alive (queue={queue_depth}/{queue_max})",
+                    f"Vault consumer not alive (queue={queue_depth}/{queue_max}, local_consumer_alive={local_consumer_alive})",
                     severity="error",
                     action_taken=", ".join(actions) or None,
                 )
@@ -632,8 +654,9 @@ class StabilityGuardian:
     async def _check_db_connections(self) -> HealthCheckResult:
         """Check DB connection pool health."""
         try:
-            from core.container import ServiceContainer
-            repo = ServiceContainer.get("state_repository", default=None)
+            from core.runtime.service_access import resolve_state_repository
+
+            repo = resolve_state_repository(self.orchestrator, default=None)
             if repo is None:
                 return HealthCheckResult("db_connections", True, "No state repo yet")
 

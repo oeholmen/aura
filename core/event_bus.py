@@ -95,6 +95,7 @@ class AuraEventBus:
         # M-12 FIX: Initialize lock in __init__, not as lazy property
         self._lock = threading.Lock()
         self._seq = 0  # Monotonic counter for stable priority ordering
+        self._seq_lock = threading.Lock()
         
         import uuid
         self._bus_id = str(uuid.uuid4())
@@ -110,7 +111,6 @@ class AuraEventBus:
 
         # Self-Diagnostic State
         self.degraded = False
-        self._last_error: Optional[Exception] = None
         self._error_count = 0
         self._delivered_count = 0
         self._dropped_count = 0
@@ -358,9 +358,11 @@ class AuraEventBus:
             return
 
         # Moderate modulo to prevent integer expansion slowing down PriorityQueue sort
-        self._seq = (self._seq + 1) % 10_000_000
+        with self._seq_lock:
+            self._seq = (self._seq + 1) % 10_000_000
+            sequence = self._seq
         # PriorityQueue tuple: (priority, sequence, event)
-        item = (priority, self._seq, {"topic": topic, "data": data})
+        item = (priority, sequence, {"topic": topic, "data": data})
         
         for q, loop in subscribers:
             try:

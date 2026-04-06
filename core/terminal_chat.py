@@ -91,39 +91,45 @@ class TerminalFallbackChat:
         """
         if not text or not text.strip():
             return
+        constitutional_runtime_live = False
         try:
-            from core.executive.executive_core import (
-                ActionType,
-                DecisionOutcome,
-                Intent,
-                IntentSource,
-                get_executive_core,
-            )
             from core.container import ServiceContainer
+            from core.constitution import get_constitutional_core
 
-            record = get_executive_core().request_approval_sync(
-                Intent(
-                    source=IntentSource.BACKGROUND,
-                    goal=f"terminal_fallback:{text[:40]}",
-                    action_type=ActionType.EMIT_MESSAGE,
-                    payload={"channel": "terminal_fallback"},
-                    priority=0.55,
-                )
+            constitutional_runtime_live = (
+                ServiceContainer.has("executive_core")
+                or ServiceContainer.has("aura_kernel")
+                or ServiceContainer.has("kernel_interface")
+                or bool(getattr(ServiceContainer, "_registration_locked", False))
             )
-            if record.outcome not in {DecisionOutcome.APPROVED, DecisionOutcome.DEGRADED}:
-                logger.debug("TerminalFallback: executive suppressed queued autonomous message: %s", record.reason)
+            approved, reason = get_constitutional_core().approve_expression_sync(
+                text.strip(),
+                source="background",
+                urgency=0.55,
+            )
+            if not approved:
+                if constitutional_runtime_live and any(
+                    marker in str(reason or "")
+                    for marker in ("gate_failed", "required", "unavailable")
+                ):
+                    try:
+                        from core.health.degraded_events import record_degraded_event
+
+                        record_degraded_event(
+                            "terminal_fallback",
+                            "executive_gate_unavailable",
+                            detail=text[:120],
+                            severity="warning",
+                            classification="background_degraded",
+                            context={"reason": reason},
+                        )
+                    except Exception as _exc:
+                        logger.debug("Suppressed Exception: %s", _exc)
+                    logger.debug("TerminalFallback: constitutional gate unavailable, suppressing autonomous message: %s", reason)
+                    return
+                logger.debug("TerminalFallback: constitutional gate suppressed queued autonomous message: %s", reason)
                 return
         except Exception as exc:
-            constitutional_runtime_live = False
-            try:
-                constitutional_runtime_live = (
-                    ServiceContainer.has("executive_core")
-                    or ServiceContainer.has("aura_kernel")
-                    or ServiceContainer.has("kernel_interface")
-                    or bool(getattr(ServiceContainer, "_registration_locked", False))
-                )
-            except Exception:
-                constitutional_runtime_live = False
             if constitutional_runtime_live:
                 try:
                     from core.health.degraded_events import record_degraded_event

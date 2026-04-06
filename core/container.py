@@ -442,6 +442,17 @@ class ServiceContainer:
         return cls.get(name, default=default)
 
     @classmethod
+    def require(cls, name: str) -> Any:
+        """Resolve a service and fail loudly if it is missing or unavailable."""
+        service = cls.get(name)
+        if service is None:
+            resolved_name = cls._resolve_name(name)
+            raise ServiceNotFoundError(
+                f"Service '{resolved_name}' resolved to None in static registry."
+            )
+        return service
+
+    @classmethod
     def validate(cls) -> tuple[bool, List[str]]:
         """Check that required dependencies are registered without instantiating services."""
         errors: List[str] = []

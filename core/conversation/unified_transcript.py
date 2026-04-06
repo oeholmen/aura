@@ -68,7 +68,7 @@ class TranscriptEntry:
 # ---------------------------------------------------------------------------
 
 # Rolling window — older entries are pruned
-_MAX_HISTORY_DEFAULT = 200
+_MAX_HISTORY_DEFAULT = 50
 
 
 class UnifiedTranscript:

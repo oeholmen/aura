@@ -7,6 +7,7 @@ problems and solve them, pushing failures to the DistillationPipe for nightly le
 import asyncio
 import logging
 import random
+import re
 import time
 from core.container import ServiceContainer
 from core.brain.cognitive_engine import ThinkingMode
@@ -14,6 +15,37 @@ from core.brain.cognitive_engine import ThinkingMode
 logger = logging.getLogger("Aura.SelfPlay")
 
 class ContinuousSelfPlay:
+    _UNCERTAINTY_PATTERNS = (
+        "i'm not sure",
+        "i am not sure",
+        "cannot determine",
+        "can't determine",
+        "insufficient information",
+        "not enough information",
+        "unclear",
+        "i guess",
+        "maybe",
+    )
+    _REASONING_MARKERS = (
+        "because",
+        "therefore",
+        "if ",
+        "then ",
+        "step",
+        "trade-off",
+        "constraint",
+        "assume",
+        "first,",
+        "second,",
+    )
+    _RESOLUTION_MARKERS = (
+        "final answer",
+        "conclusion",
+        "therefore",
+        "the best resolution",
+        "the solution is",
+    )
+
     def __init__(self, idle_threshold_seconds: int = 1800):
         # Default: Wait for 30 minutes of chat silence before initiating self-play
         self.idle_threshold = idle_threshold_seconds
@@ -56,6 +88,44 @@ Detail your logical chain of thought before providing the final answer.
         res = await engine.think(objective=prompt, mode=ThinkingMode.DEEP, priority=0.2, block_user=False)
         return res.content if hasattr(res, 'content') else str(res)
 
+    def _evaluate_solution_quality(self, solution: str) -> tuple[bool, float, str]:
+        text = str(solution or "").strip()
+        if not text:
+            return False, 0.0, "empty_response"
+
+        lowered = text.lower()
+        word_count = len(text.split())
+        if word_count < 50:
+            return False, 0.1, "too_short"
+
+        score = 0.3
+        reasons: list[str] = []
+
+        uncertainty_hits = sum(1 for pattern in self._UNCERTAINTY_PATTERNS if pattern in lowered)
+        if uncertainty_hits:
+            score -= min(0.5, uncertainty_hits * 0.2)
+            reasons.append("uncertain_language")
+
+        if any(marker in lowered for marker in self._REASONING_MARKERS):
+            score += 0.25
+        else:
+            reasons.append("missing_reasoning_markers")
+
+        if any(marker in lowered for marker in self._RESOLUTION_MARKERS):
+            score += 0.2
+        else:
+            reasons.append("missing_resolution_marker")
+
+        if re.search(r"(^|\n)\s*(\d+\.|[-*])\s+", text):
+            score += 0.15
+
+        paragraphs = [part for part in re.split(r"\n\s*\n", text) if part.strip()]
+        if len(paragraphs) >= 2:
+            score += 0.1
+
+        score = max(0.0, min(score, 0.95))
+        return score >= 0.55, score, ",".join(reasons) or "structured"
+
     async def trigger_cycle(self, last_user_interaction: float):
         """Main loop trigger, called by the AgencyCore heartbeat."""
         if self.is_playing:
@@ -82,8 +152,13 @@ Detail your logical chain of thought before providing the final answer.
             # 3. Evaluate the effort and route to Distillation
             # If the solver's response is short, confused, or lacks structured logic,
             # we consider it a failure and send it to the Teacher model.
-            if "I'm not sure" in solution or len(solution.split()) < 50:
-                logger.info("❌ Self-Play Solver failed. Routing to Distillation Pipe.")
+            succeeded, confidence, reason = self._evaluate_solution_quality(solution)
+            if not succeeded:
+                logger.info(
+                    "❌ Self-Play Solver failed quality gate (%s, confidence=%.2f). Routing to Distillation Pipe.",
+                    reason,
+                    confidence,
+                )
                 
                 distillation = ServiceContainer.get("distillation_pipe", default=None)
                 if distillation and hasattr(distillation, 'flag_for_distillation'):
@@ -92,10 +167,10 @@ Detail your logical chain of thought before providing the final answer.
                     await distillation.flag_for_distillation(
                         prompt=problem,
                         local_response=solution,
-                        confidence=0.1 # Low confidence triggered this
+                        confidence=max(0.05, confidence),
                     )
             else:
-                logger.info("✅ Self-Play Solver succeeded. Logic is sound.")
+                logger.info("✅ Self-Play Solver succeeded (confidence=%.2f).", confidence)
                 
                 # Optional: Send highly successful complex logic to the Abstraction Engine
                 abstraction = ServiceContainer.get("abstraction_engine", default=None)

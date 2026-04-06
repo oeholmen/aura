@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from typing import Any, Dict
 from .orchestrator_types import OrchestratorState
@@ -51,11 +52,17 @@ class OrchestratorStateMixin:
                 
             # Modular Restoration
             self._restore_core_metrics(data)
-            self._restore_history(data) 
+            restore_history = os.environ.get("AURA_RESTORE_HISTORY") == "1"
+            if restore_history:
+                self._restore_history(data)
+                history_mode = "History restored from snapshot"
+            else:
+                self.conversation_history = []
+                history_mode = "History skipped for fresh context"
             self._restore_cognition(data)
             self._restore_active_plans(data)
             
-            logger.info("System state restored successfully (History skipped for fresh context)")
+            logger.info("System state restored successfully (%s)", history_mode)
         except Exception as e:
             logger.error("Error loading state: %s", e)
 

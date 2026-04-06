@@ -66,7 +66,11 @@ class ICELayer:
         """Detect identity violations from the Executive Guard."""
         label = payload.get("label", "unknown")
         anomaly = self.classify_anomaly(label)
-        logger.warning(f"🚨 [ICE] AWE CLASSIFIED: {anomaly['type']} ({anomaly['desc']}). Containment: {anomaly['containment']}")
+        description = anomaly.get("description") or anomaly.get("desc") or "Unknown anomaly."
+        logger.warning(
+            f"🚨 [ICE] AWE CLASSIFIED: {anomaly['type']} ({description}). "
+            f"Containment: {anomaly['containment']}"
+        )
         logger.warning(f"🚨 [ICE] EXECUTIVE VIOLATION DETECTED: {label}. Increasing threat level.")
         # Fatal violations spike the threat level immediately
         self._threat_level = min(1.0, self._threat_level + 0.3)
@@ -86,10 +90,13 @@ class ICELayer:
         elif "LATENCY" in l or "STALL" in l: a_type = "TEMPORAL_STALL"
         
         info = self._anomaly_types.get(a_type, {"desc": "Unknown anomaly.", "containment": "MONITOR"})
+        description = info.get("desc", "Unknown anomaly.")
         res = {
             "type": a_type,
-            "description": info.get("desc"),
-            "containment": info.get("containment")
+            # Keep both keys for compatibility with older and newer callers.
+            "desc": description,
+            "description": description,
+            "containment": info.get("containment", "MONITOR"),
         }
         
         if self._event_bus:

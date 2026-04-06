@@ -152,10 +152,16 @@ class _QueueHandler(logging.Handler):
             elif len(log_queue) < log_queue.maxlen:
                 self._overflow_logged = False
 
-            if main_loop is not None:
-                asyncio.run_coroutine_threadsafe(
-                    broadcast_bus.publish(log_entry), main_loop
-                )
+            if main_loop is not None and not main_loop.is_closed() and main_loop.is_running():
+                publish_coro = broadcast_bus.publish(log_entry)
+                try:
+                    asyncio.run_coroutine_threadsafe(publish_coro, main_loop)
+                except Exception:
+                    try:
+                        publish_coro.close()
+                    except Exception:
+                        pass
+                    raise
 
         except Exception as e:
             print(f"CRITICAL LOG FALLBACK: {record.levelname} - {record.getMessage()}", file=sys.stderr)
@@ -174,6 +180,7 @@ from interface.event_bridge import mycelial_ui_callback, broadcast_telemetry, ru
 
 # ── Shared helpers ──
 from interface.helpers import _notify_user_spoke
+from interface.auth import _restore_owner_session_from_request
 
 
 # ── Lifespan ──────────────────────────────────────────────────
@@ -482,6 +489,58 @@ app.include_router(memory_routes.router, prefix="/api", tags=["memory-api"])
 app.include_router(privacy_routes.router, prefix="/api", tags=["privacy"])
 app.include_router(rpc_routes.router, prefix="/rpc", tags=["rpc"])
 
+_system_collect_liquid_state_payload = system_routes._collect_liquid_state_payload
+
+
+def _collect_conversation_lane_status() -> Dict[str, Any]:
+    return chat_routes._collect_conversation_lane_status()
+
+
+def _conversation_lane_is_standby(lane: Optional[Dict[str, Any]]) -> bool:
+    return chat_routes._conversation_lane_is_standby(lane)
+
+
+def _collect_liquid_state_payload(
+    ls_data: Dict[str, Any],
+    *,
+    runtime_state: Dict[str, Any],
+    homeostasis_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    return _system_collect_liquid_state_payload(
+        ls_data,
+        runtime_state=runtime_state,
+        homeostasis_data=homeostasis_data,
+    )
+
+
+def _sync_legacy_system_exports() -> None:
+    system_routes._restore_owner_session_from_request = _restore_owner_session_from_request
+    system_routes._collect_conversation_lane_status = _collect_conversation_lane_status
+    system_routes._conversation_lane_is_standby = _conversation_lane_is_standby
+    system_routes._collect_liquid_state_payload = _collect_liquid_state_payload
+    system_routes.build_boot_health_snapshot = build_boot_health_snapshot
+    system_routes.get_runtime_state = get_runtime_state
+    system_routes.psutil = psutil
+
+
+def _collect_stability_details() -> Dict[str, Any]:
+    _sync_legacy_system_exports()
+    return system_routes._collect_stability_details()
+
+
+def _collect_runtime_capabilities(conversation_lane: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    _sync_legacy_system_exports()
+    return system_routes._collect_runtime_capabilities(conversation_lane)
+
+
+async def api_health(request: Request):
+    _sync_legacy_system_exports()
+    return await system_routes.api_health(request)
+
+
+async def api_memory_episodic(limit: int = 20, offset: int = 0):
+    return await memory_routes.api_memory_episodic(limit=limit, offset=offset)
+
 
 # ── WebSocket broadcaster ─────────────────────────────────────
 
@@ -727,4 +786,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

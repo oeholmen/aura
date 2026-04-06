@@ -103,10 +103,26 @@ class MessagePipelineMixin:
             from core.world_model.expectation_engine import ExpectationEngine
             ee = ExpectationEngine(self.cognitive_engine)
             surprise = await ee.calculate_surprise(thought.expectation, str(result)[:500])
-            
-            from core.utils.task_tracker import get_task_tracker
-            # Recursive Learning task
-            get_task_tracker().track_task(asyncio.create_task(ee.update_beliefs_from_result(tool_name, str(result)[:1000])))
+
+            # Substrate authority gate: belief updates are STATE_MUTATION
+            _belief_update_allowed = True
+            try:
+                from core.container import ServiceContainer as _SC_bp
+                _sa = _SC_bp.get("substrate_authority", default=None)
+                if _sa:
+                    from core.consciousness.substrate_authority import ActionCategory, AuthorizationDecision
+                    _bv = _sa.authorize(content=f"belief_update:{tool_name}", source="expectation_engine",
+                                        category=ActionCategory.STATE_MUTATION, priority=0.4)
+                    if _bv.decision == AuthorizationDecision.BLOCK:
+                        _belief_update_allowed = False
+                        logger.debug("Belief update blocked by substrate authority")
+            except Exception:
+                pass  # fail-open
+
+            if _belief_update_allowed:
+                from core.utils.task_tracker import get_task_tracker
+                # Recursive Learning task
+                get_task_tracker().track_task(asyncio.create_task(ee.update_beliefs_from_result(tool_name, str(result)[:1000])))
             
             if surprise > 0.7:
                 logger.info("😲 HIGH SURPRISE: Triggering re-think.")

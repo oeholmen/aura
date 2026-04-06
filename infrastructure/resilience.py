@@ -172,6 +172,42 @@ class AsyncCircuitBreaker:
         self._cb.record_success()
 
 
+class _SafeDatabaseLockGuard:
+    def __init__(self, lock: threading.RLock, *, name: str, timeout: Optional[float]) -> None:
+        self._lock = lock
+        self._name = name
+        self._timeout = timeout
+
+    def __enter__(self) -> threading.RLock:
+        if self._timeout is None:
+            acquired = self._lock.acquire()
+        else:
+            acquired = self._lock.acquire(timeout=max(0.0, float(self._timeout)))
+        if not acquired:
+            raise TimeoutError(f"Timed out acquiring database lock for {self._name}")
+        return self._lock
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self._lock.release()
+        return False
+
+
+class SafeDatabaseLock:
+    """Small context-managed lock with timeout semantics for DB critical sections."""
+
+    def __init__(self, name: str, timeout_s: float = 5.0) -> None:
+        self.name = name
+        self.timeout_s = timeout_s
+        self._lock = threading.RLock()
+
+    def acquire(self, timeout: Optional[float] = None) -> _SafeDatabaseLockGuard:
+        return _SafeDatabaseLockGuard(
+            self._lock,
+            name=self.name,
+            timeout=self.timeout_s if timeout is None else timeout,
+        )
+
+
 # ── Retry Logic ───────────────────────────────────────────────
 
 

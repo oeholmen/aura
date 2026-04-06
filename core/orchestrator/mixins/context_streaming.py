@@ -156,7 +156,7 @@ class ContextStreamingMixin:
                 logger.error("Failed to inject strategic context: %s", e)
 
         # Core Engines
-        from ..container import ServiceContainer
+        from ...container import ServiceContainer
         from core.utils.concurrency import RobustLock
 
         self._cognitive_engine = ServiceContainer.get("cognitive_engine", default=None)
@@ -417,7 +417,7 @@ class ContextStreamingMixin:
 
                 # 4. Sentient Unity: Metabolic Archival Compression
                 # Periodically compress raw SQLite and text logs so the engine doesn't bloat over infinite horizons
-                from ..container import ServiceContainer
+                from ...container import ServiceContainer
                 archive_eng = ServiceContainer.get("archive_engine", default=None)
                 if archive_eng and hasattr(archive_eng, 'archive_vital_logs'):
                     logger.info("📦 Deep Sleep Cycle: Triggering Metabolic Archival Compression...")

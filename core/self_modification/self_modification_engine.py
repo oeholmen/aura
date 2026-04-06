@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import random
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -21,6 +22,31 @@ from .shadow_ast_healer import ShadowASTHealer
 from .shadow_runtime import get_shadow_runtime
 
 logger = logging.getLogger("SelfModification.Engine")
+
+
+def _schedule_background_coro(coro: Any, *, label: str) -> None:
+    """Run a coroutine whether or not we're inside a live event loop."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        def _runner() -> None:
+            try:
+                asyncio.run(coro)
+            except Exception as exc:
+                logger.debug("%s background runner failed: %s", label, exc)
+
+        threading.Thread(target=_runner, name=f"aura_{label}", daemon=True).start()
+        return
+
+    task = loop.create_task(coro)
+
+    def _consume_result(done: asyncio.Task) -> None:
+        try:
+            done.result()
+        except Exception as exc:
+            logger.debug("%s background task failed: %s", label, exc)
+
+    task.add_done_callback(_consume_result)
 
 
 class AutonomousSelfModificationEngine:
@@ -134,8 +160,8 @@ class AutonomousSelfModificationEngine:
         async def _log():
             event = await self.error_intelligence.on_error(error, context, skill_name, goal)
             logger.debug("Error logged: %s", event.fingerprint())
-        
-        asyncio.create_task(_log())
+
+        _schedule_background_coro(_log(), label="self_mod_error_log")
     
     def on_skill_execution(
         self,
@@ -249,8 +275,8 @@ class AutonomousSelfModificationEngine:
         kernel = ServiceContainer.get("aura_kernel", default=None)
         volition = getattr(kernel, 'volition_level', 0) if kernel else 0
         
-        if volition < 3 and not force:
-            logger.warning("SME: Modification BLOCKED. Requires Volition Level 3 (Action).")
+        if volition < 1 and not force:
+            logger.warning("SME: Modification BLOCKED. Requires Volition Level 1+.")
             return False
 
         if not self.auto_fix_enabled and not force:
@@ -625,6 +651,9 @@ class AutonomousSelfModificationEngine:
     
     async def _monitoring_loop(self):
         """Background monitoring loop with circuit breaker (v5.2)"""
+        from core.container import ServiceContainer
+        from core.runtime.background_policy import background_activity_reason
+
         # Phase 24 Optimization: Delay first cycle to unblock boot
         await asyncio.sleep(10)
         logger.info("Monitoring loop starting...")
@@ -634,6 +663,19 @@ class AutonomousSelfModificationEngine:
         
         while self.monitoring_enabled:
             try:
+                orch = ServiceContainer.get("orchestrator", default=None)
+                policy_reason = background_activity_reason(
+                    orch,
+                    min_idle_seconds=max(float(self.monitor_interval), 900.0),
+                    max_memory_percent=80.0,
+                    max_failure_pressure=0.10,
+                    require_conversation_ready=True,
+                )
+                if policy_reason:
+                    logger.info("Skipping autonomous self-modification cycle: %s", policy_reason)
+                    await asyncio.sleep(min(_backoff, 60.0))
+                    continue
+
                 result = await self.run_autonomous_cycle()
                 
                 # Fix: run_autonomous_cycle can return a bool via report_optimization
@@ -690,7 +732,7 @@ class AutonomousSelfModificationEngine:
         await asyncio.sleep(120)  # Boot grace: subsystems need time to initialize
         logger.info("Health Watcher starting...")
         _injection_cooldowns: dict[str, float] = {}  # subsystem → last injection time
-        _INJECTION_COOLDOWN = 300.0  # 5 minutes between injections per subsystem
+        _INJECTION_COOLDOWN = 60.0  # 1 minute between injections per subsystem
 
         while self.monitoring_enabled:
             try:

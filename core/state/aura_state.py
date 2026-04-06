@@ -486,7 +486,7 @@ class CurriculumItem:
         "Discussion Forums"
     ])
     status: str = "suggested"  # suggested, in_progress, completed, ignored
-    synthesis_level: str = "none" # none, superficial, wikipedia_depth, extra_credit
+    synthesis_level: str = "none"  # none, shallow, moderate, deep
     synthesis_summary: str = ""
     added_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None

@@ -4,6 +4,7 @@ Handles browser actions with domain allowlisting and rate limiting.
 """
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import logging
+import os
 import time
 from typing import Dict, Any, List, Optional, Set
 from urllib.parse import urlparse
@@ -11,9 +12,11 @@ from urllib.parse import urlparse
 logger = logging.getLogger("Executors.Browser")
 
 # Security Configuration
-# Domain allowlisting disabled — full autonomy. The allowlist is retained
-# as documentation of previously-restricted domains and for the management API.
-ALLOW_ALL_DOMAINS = True
+# Full-domain access is an explicit opt-in for local experiments. The default
+# runtime path enforces the allowlist below.
+ALLOW_ALL_DOMAINS = os.getenv("AURA_BROWSER_ALLOW_ALL_DOMAINS", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
 
 DOMAIN_ALLOWLIST: set = {
     # Retained for reference / management API only. Not enforced.
@@ -44,7 +47,9 @@ def _is_domain_allowed(url: str, allowlist: Optional[Set[str]] = None) -> bool:
         return True # Default to allow if no list provided (open mode)
         
     try:
-        domain = urlparse(url).netloc.lower()
+        domain = (urlparse(url).hostname or "").lower().strip(".")
+        if not domain:
+            return False
         
         # Check exact match
         if domain in allowlist:

@@ -748,6 +748,17 @@ final class AuraLauncherDelegate: NSObject, NSApplicationDelegate {
         "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 
+    private func normalizedDirectCLIArguments(_ arguments: [String]) -> [String] {
+        arguments.map { argument in
+            switch argument {
+            case "--open-gui-window":
+                return "--gui-window"
+            default:
+                return argument
+            }
+        }
+    }
+
     private func requiresProtectedFolderFallback() -> Bool {
         let home = NSHomeDirectory()
         let protectedRoots = [
@@ -1367,7 +1378,7 @@ final class AuraLauncherDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func spawnAuxiliaryAura(arguments: [String]) throws {
-        let directArguments = ["-u", auraMainScript.path] + arguments
+        let directArguments = ["-u", auraMainScript.path] + normalizedDirectCLIArguments(arguments)
         do {
             try spawnAuraSubprocess(arguments: directArguments)
         } catch {

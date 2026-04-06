@@ -97,6 +97,27 @@ async def test_recent_activity_reply_ignores_stale_live_state(monkeypatch):
     assert reply is None
 
 
+@pytest.mark.asyncio
+async def test_recent_activity_reply_uses_natural_just_working_on_preamble(monkeypatch):
+    monkeypatch.setattr(
+        demo_support,
+        "_load_last_activity",
+        lambda: {
+            "target_name": "chat.py",
+            "summary": "I finished the background diagnostic on `chat.py`. It traces the chat surface.",
+            "completed_at": __import__("time").time(),
+        },
+    )
+
+    reply = await demo_support.maybe_build_recent_activity_reply(
+        "What were you just working on?",
+        SimpleNamespace(),
+    )
+
+    assert reply is not None
+    assert reply.startswith("I was just working on `chat.py`.")
+
+
 def test_python_summary_reports_real_parse_failures():
     summary = demo_support._python_summary(
         Path("broken.py"),

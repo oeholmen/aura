@@ -31,6 +31,16 @@ class TrainSelfSkill:
             
         return {"ok": False, "error": f"Unknown action: {action}"}
 
+    @staticmethod
+    def _extract_turn_fields(turn: Any) -> tuple[str, str]:
+        if isinstance(turn, dict):
+            role = turn.get("role") or turn.get("speaker") or ""
+            content = turn.get("content") or turn.get("text") or ""
+        else:
+            role = getattr(turn, "role", "") or getattr(turn, "speaker", "") or ""
+            content = getattr(turn, "content", "") or getattr(turn, "text", "") or ""
+        return str(role).strip().lower(), str(content).strip()
+
     async def _collect_high_value_memories(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Gathers successful interactions for future training (v13: no fake data)."""
         try:
@@ -47,16 +57,27 @@ class TrainSelfSkill:
                     "collected": 0
                 }
             
-            with open(self.dataset_path, "a") as f:
-                for turn in history[-10:]:  # Last 10 turns
-                    if isinstance(turn, dict) and turn.get("role") == "assistant":
-                        entry = {
-                            "instruction": "Continue the conversation naturally.",
-                            "input": "",
-                            "output": turn.get("content", "")[:500]
-                        }
-                        f.write(json.dumps(entry) + "\n")
-                        collected += 1
+            examples = []
+            last_user_message = ""
+
+            for turn in history:
+                role, content = self._extract_turn_fields(turn)
+                if not role or not content:
+                    continue
+                if role in {"user", "human"}:
+                    last_user_message = content[:1000]
+                    continue
+                if role in {"assistant", "aura"} and last_user_message:
+                    examples.append({
+                        "instruction": "Respond to the user's message in Aura's voice.",
+                        "input": last_user_message[:500],
+                        "output": content[:500],
+                    })
+
+            with open(self.dataset_path, "a", encoding="utf-8") as f:
+                for entry in examples[-10:]:
+                    f.write(json.dumps(entry) + "\n")
+                    collected += 1
                 
             return {
                 "ok": True,
