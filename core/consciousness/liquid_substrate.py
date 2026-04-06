@@ -774,20 +774,41 @@ class LiquidSubstrate:
             self.x = np.zeros(self.config.neuron_count)
             self.W = np.random.randn(self.config.neuron_count, self.config.neuron_count) * 0.1
 
+    def _apply_idle_decay(self, idle_seconds: float):
+        """Apply accumulated natural decay for time spent in deep idle.
+
+        Instead of running the ODE loop at 20Hz while no one is present,
+        we pause and compute the equivalent exponential decay on resume.
+        This is mathematically equivalent: x(t) = x(0) * exp(-decay * t).
+        """
+        if idle_seconds <= 0 or self.x is None:
+            return
+        decay_factor = np.exp(-self.config.decay_rate * idle_seconds)
+        self.x = self.x * decay_factor
+        logger.info(
+            "Applied %.0fs idle decay (factor=%.4f) to substrate state.",
+            idle_seconds, decay_factor,
+        )
+
     async def _apply_battery_throttling(self) -> float:
-        """Dynamically adjust integration speed based on power/load."""
+        """Dynamically adjust integration speed based on power/load.
+
+        Tiered approach:
+          - Active user: full 20Hz
+          - 3min idle: 10Hz
+          - 10min idle: 5Hz
+          - 30min+ idle: pause loop entirely, compute decay on resume
+        """
         import psutil
         dt = self.config.time_constant
         multiplier = 1.0
-        
+
         try:
-            # Check battery on macOS
             battery = psutil.sensors_battery()
             if battery and not battery.power_plugged:
-                # On battery: Slow down by 2x to 4x depending on level
                 multiplier = max(multiplier, 4.0 if battery.percent < 20 else 2.0)
-        except Exception as e:
-            logger.debug("Battery check failed: %s", e)
+        except Exception:
+            pass
 
         try:
             from core.container import ServiceContainer
@@ -799,14 +820,17 @@ class LiquidSubstrate:
                     or getattr(getattr(orchestrator, "status", None), "last_user_interaction_time", 0.0)
                     or 0.0
                 )
-                if last_user <= 0.0:
+                idle_seconds = max(0.0, time.time() - last_user) if last_user > 0 else 0.0
+
+                if idle_seconds >= 1800.0:
+                    # Deep idle (30min+): pause the loop, apply bulk decay, sleep long
+                    self._apply_idle_decay(min(idle_seconds, 3600.0))
+                    self.current_update_rate = 0.5  # Wake briefly every 2s to check
+                    return dt * 10.0
+                elif idle_seconds >= 600.0:
+                    multiplier = max(multiplier, 4.0)
+                elif idle_seconds >= 180.0:
                     multiplier = max(multiplier, 2.0)
-                else:
-                    idle_seconds = max(0.0, time.time() - last_user)
-                    if idle_seconds >= 600.0:
-                        multiplier = max(multiplier, 4.0)
-                    elif idle_seconds >= 180.0:
-                        multiplier = max(multiplier, 2.0)
         except Exception as e:
             logger.debug("Idle throttling check failed: %s", e)
 
