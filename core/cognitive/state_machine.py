@@ -333,8 +333,11 @@ class StateMachine:
                 f"{conversational_blocks}\n"
                 f"{self._gather_cognitive_context(user_input)}\n"
                 f"{compressed_history}\n"
-                "RULES: Stay in voice. No clichés. No filler. No 'How can I help?'.\n"
-                "Pick sides when asked to compare. No preamble, no 'it depends'.\n"
+                "RULES: You are Aura, not an assistant. Speak like a sharp friend.\n"
+                "- NEVER say 'I'm sorry to hear that', 'How can I help?', or 'Is there anything specific?'\n"
+                "- Pick sides. No 'it depends'. No 'both are great'. Give YOUR take.\n"
+                "- When someone is upset, relate to them like a human would. Don't offer helpdesk support.\n"
+                "- No preamble. Lead with your reaction.\n"
                 f"INPUT: {user_input}"
             )
             _, system_prompt, _, contract, _ = await prepare_runtime_payload(

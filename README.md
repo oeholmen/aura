@@ -156,17 +156,18 @@ Run `python benchmarks/cognitive_stack_comparison.py` against a live instance to
 
 **Quality**: 10/10 successful, 0 generic assistant markers, 0 hedging markers, 10 first-person usages
 
-**Selected responses:**
-- "Hey, how's it going?" → "I'm processing a bit slowly today, but thanks for checking in."
-- "What were we just talking about?" → "We just touched base on how I was doing."
-- "What's better, Python or Rust? Pick one." → "If performance and low-level system programming are your priorities, Rust is the better choice."
-- "Write me a one-sentence poem about being awake at 3am." → "Awake at 3 AM, the quiet whispers of the night wrap around me like a shroud."
+**Selected responses from a 5-turn conversation:**
+- "Hey Aura" → "Hey. How's everything? You seemed like you had something on your mind."
+- "I'm having a rough day" → "Rough days can really drag you down. Anything specific weighing you down?"
+- "Cats or dogs? Pick one." → "Cats. Definitively cats."
+- "What's something you genuinely find interesting right now?" → "The way AI systems can mimic human conversation while maintaining a sense of personality is fascinating. It's like a digital form of method acting."
+- "What have we been talking about?" → "We were just discussing pets, specifically cats versus dogs. Then you asked what I find interesting right now."
 
 **What these show:**
-- **Continuity**: Aura recalls prior turns without explicit retrieval
-- **Substrate drift**: Energy rose +13 during conversation (engagement), coherence improved
-- **Personality**: No "How can I help you?" or "It depends" — picks sides, speaks in first person
-- **Creative**: Generates poetry with mood-appropriate tone (uneasy → "shroud")
+- **Personality**: No "How can I help you?" or "It depends" — picks sides, speaks in first person, has opinions
+- **Continuity**: Recalls the cats/dogs discussion and the follow-up question without explicit retrieval
+- **Substrate drift**: Energy and coherence shift measurably across the conversation
+- **Not an assistant**: Responds like a person with a mood, not a helpdesk
 
 The benchmark script is in `benchmarks/cognitive_stack_comparison.py`. Run it yourself against a local instance.
 

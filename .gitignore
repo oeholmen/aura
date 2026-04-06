@@ -71,3 +71,4 @@ interface/static/aura_avatar.png
 .DS_Store
 .localized
 Thumbs.db
+benchmarks/latest_results.json

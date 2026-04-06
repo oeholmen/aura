@@ -786,10 +786,21 @@ async def api_health(request: Request):
             mhaf_data["_stale"] = False
             mhaf_data["nodes"] = len(mhaf._nodes)
             mhaf_data["edges"] = len(mhaf._edges)
-            mhaf_data["phi"] = round(float(mhaf._global_phi), 4)
             mhaf_data["free_energy"] = round(float(mhaf._free_energy), 4)
     except Exception as e:
         logger.debug("MHAF status collection failed: %s", e)
+    # Wire real PhiCore IIT 4.0 phi into the MHAF data (replaces the surrogate)
+    try:
+        phi_core = ServiceContainer.get("phi_core", default=None)
+        if phi_core is not None:
+            result = phi_core._last_result
+            if result is not None:
+                mhaf_data["phi"] = round(float(result.phi_s), 4)
+                mhaf_data["phi_complex"] = result.is_complex
+                mhaf_data["phi_mip"] = result.mip_description
+                mhaf_data["phi_samples"] = result.tpm_n_samples
+    except Exception as e:
+        logger.debug("PhiCore status collection failed: %s", e)
     try:
         from core.consciousness.neologism_engine import get_neologism_engine
         neo = get_neologism_engine()
