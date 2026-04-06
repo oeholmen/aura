@@ -1903,17 +1903,12 @@ class InferenceGate:
 
         # 2. Optional cloud fallback.
         if not allow_cloud_fallback:
-            logger.error("🛑 Local inference paths exhausted. Cloud fallback disabled for this request.")
-            if not is_background and self._origin_is_user_facing(origin):
-                return None
-            return "I'm having trouble connecting to my cognitive engine right now. Please try again in a moment."
+            logger.error("Local inference paths exhausted. Cloud fallback disabled.")
+            return None  # Don't return error text — it gets spoken by TTS
 
         if time.monotonic() < self._cloud_backoff_until:
-            logger.warning("☁️ Cloud fallback cooling down. Skipping remote retry.")
-            logger.error("🛑 ALL inference paths exhausted (Local + Cloud)")
-            if not is_background and self._origin_is_user_facing(origin):
-                return None
-            return "I'm having trouble connecting to my cognitive engine right now. Please try again in a moment."
+            logger.warning("Cloud fallback cooling down. Skipping remote retry.")
+            return None
 
         try:
             from core.container import ServiceContainer
@@ -1960,12 +1955,10 @@ class InferenceGate:
                 self._cloud_backoff_until = time.monotonic() + 60.0
             logger.error("☁️ Cloud fallback failed: %s", cloud_err)
 
-        # 3. Total failure — foreground requests fail closed, background keeps a
-        # diagnostic fallback string so autonomous flows do not silently vanish.
-        logger.error("🛑 ALL inference paths exhausted (Local + Cloud)")
-        if not is_background and self._origin_is_user_facing(origin):
-            return None
-        return "I'm having trouble connecting to my cognitive engine right now. Please try again in a moment."
+        # All inference paths exhausted. Return None so callers can handle
+        # gracefully without the error text leaking to TTS or the user.
+        logger.error("All inference paths exhausted (Local + Cloud)")
+        return None
 
     def _post_inference_update(self, response_text: str):
         """Update downstream systems after each inference completes.
