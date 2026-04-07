@@ -42,8 +42,10 @@ class SibylSystem:
         await self._recalculate_hue()
 
     async def _recalculate_hue(self):
-        # Algorithm: CC = Σ(factor × weight) / Σ(weights)
-        # Weights: Deviation(4.0), Empathy(2.0), Volatility(1.0)
+        # Behavioral risk score: weighted average of deviation, inverse empathy, volatility.
+        # "Hue" is the Psycho-Pass naming convention. The math is a standard weighted composite.
+        # Score range: 0 (healthy) to 300 (critical).
+        # Weights reflect relative importance: deviation matters most (4x).
         d, e, v = self._factors["deviation"], self._factors["empathy"], self._factors["volatility"]
         raw = (d * 4.0 + (1.0 - e) * 2.0 + v * 1.0) / 7.0
         self._hue_score = raw * 300  # Scale to 0-300

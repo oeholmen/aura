@@ -361,9 +361,17 @@ class IdentityService:
     def update_kinship(self, name: str, bond_delta: float = 0.0, trust_delta: float = 0.0):
         """Modulate a social bond."""
         if name in self.state.kinship:
-            # Audit Fix: Harden kinship escalation path
-            # Prevent rapid or unauthorized escalation for non-core kinship members
-            if name not in ["Bryan", "Tatiana"]:
+            # Rate-limit kinship escalation for non-sovereign sessions.
+            # Sovereign users (authenticated via passphrase) escalate freely.
+            # Everyone else is capped at slow increments to prevent social engineering.
+            try:
+                from core.security.trust_engine import get_trust_engine
+                trust = get_trust_engine()
+                is_sovereign = trust.current_trust_level() == "sovereign"
+            except Exception:
+                is_sovereign = False
+
+            if not is_sovereign:
                 bond_delta = min(bond_delta, 0.01)
                 trust_delta = min(trust_delta, 0.01)
                 

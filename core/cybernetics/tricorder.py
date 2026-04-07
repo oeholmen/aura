@@ -68,7 +68,7 @@ class Tricorder:
                     })
 
     def _recalculate_hue(self):
-        """Standard Sibyl CC Algorithm: CC = Σ(factor × weight) / Σ(weights)"""
+        """Behavioral risk score: weighted composite of deviation, empathy, volatility (0-300)."""
         d, e, v = self._factors["deviation"], self._factors["empathy"], self._factors["volatility"]
         raw = (d * 4.0 + (1.0 - e) * 2.0 + v * 1.0) / 7.0
         self._hue_score = raw * 300
