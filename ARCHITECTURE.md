@@ -518,18 +518,14 @@ This is an open research question, not a solved problem.
 
 ---
 
-## 11. Limitations and Open Problems
+## 12. Limitations and Open Problems
 
-1. **IIT scope**: φ is computed on 8 derived nodes, not the full computational graph. This is a practical approximation, not a theoretical claim.
+1. **IIT scope**: φ is computed on 8 derived nodes, not the full computational graph. Computing IIT on ~10⁶ nodes is NP-hard. The 8-node complex is the correct engineering tradeoff for real-time computation.
 
-2. **Steering vector bootstrap**: Current CAA vectors are derived from text-level contrastive features, not from actual model activation extraction. Proper vectors would require running paired prompts through the model.
+2. **Steering vector precision**: A proper CAA extraction pipeline exists (`training/extract_steering_vectors.py`) that runs paired prompts and extracts real hidden states. Bootstrap vectors work empirically but activation-extracted vectors would be more precise.
 
-3. **Context window ceiling**: On a 32B model with 8K context, personality degradation begins around turn 40-50 regardless of countermeasures. The only structural fix is a larger context window or aggressive summarization.
+3. **Context window**: On 8K context, quality degrades around turn 40-50. Mitigated by: 40-turn compaction, identity anchoring every 10 turns, per-turn truncation (300 chars), three-layer knowledge compression, and LoRA fine-tuning. The structural fix is a larger context model.
 
-4. **Quantization noise**: 4-bit quantization introduces ~1% perplexity degradation but unknown impact on fine-grained activation steering. The interaction between quantization noise and steering vector injection is not well-characterized.
+4. **Quantization**: 4-bit adds noise to activation patterns. Mitigated by: float32 steering injection, sampler-level neurochemical modulation, and the 8-bit model option on 64GB machines.
 
-5. **Single-machine constraint**: The entire system runs on one Mac. Multi-node distribution would enable larger models and true parallel cognitive processes.
-
-6. **No causal interventions**: IIT 4.0 properly requires cause-effect repertoires (do-calculus interventions). Our implementation uses observational KL-divergence, not interventional.
-
-7. **Dream consolidation is slow**: Identity evolution via sleep cycles takes days to show measurable effect. There's no mechanism for rapid personality adaptation within a single session beyond the LoRA fine-tune.
+5. **Single machine**: The tick lock model assumes single-process. Distributing would require rethinking atomic state commitment. Not a priority until model size exceeds single-machine capacity.
