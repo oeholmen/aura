@@ -311,13 +311,15 @@ class CognitiveCoordinator:
         return ctx
 
     def detect_user_identity(self, message: str) -> Dict[str, Any]:
-        """Determine who is talking to Aura."""
-        msg = message.lower()
-        if any(x in msg for x in ["i'm bryan", "im bryan", "it's bryan", "its bryan", "this is bryan"]):
-            return {"name": "Bryan", "role": "Architect", "relation": "Kin"}
-        if any(x in msg for x in ["i'm tatiana", "im tatiana", "it's tatiana", "its tatiana"]):
-            return {"name": "Tatiana", "role": "Core Kin", "relation": "Kin"}
-        return {"name": "Stranger", "role": "Unknown", "relation": "Neutral"}
+        """Determine who is talking to Aura.
+
+        NOTE: This is NOT authentication. Real identity verification uses
+        the passphrase system in core/security/user_recognizer.py.
+        This method only provides a soft hint for conversation context.
+        """
+        # Identity is determined by the session auth system, not by message content.
+        # Self-identification in message text is treated as a conversational hint only.
+        return {"name": "User", "role": "Peer", "relation": "Neutral"}
 
     # ------------------------------------------------------------------
     # Action Handling & Safety

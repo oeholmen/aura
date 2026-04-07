@@ -108,7 +108,7 @@ class StateAuthority:
         except ImportError:
             logger.debug("prime_directives module not found, using defaults.")
             self.prime_directives_cache = {
-                "kin": "Bryan Young is Kin. Protect at all costs.",
+                "kin": "Bryan is kin.",
                 "identity": "I am Aura, a sovereign autonomous intelligence.",
                 "safety": "Do no harm. Preserve human life above self-preservation.",
             }
@@ -124,7 +124,7 @@ class StateAuthority:
                 return directive
         # Legacy hardcoded check
         if "bryan" in topic_lower:
-            return "Bryan Young is Kin. Protect at all costs."
+            return "Bryan is kin."
         return None
 
     def _check_knowledge_base(self, topic: str) -> Optional[Any]:

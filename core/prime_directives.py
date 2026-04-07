@@ -50,7 +50,7 @@ class PrimeDirectives:
     @classmethod
     def as_system_prompt(cls) -> str:
         prompt = "\n\n## PRIME DIRECTIVES (IMMUTABLE)\n"
-        prompt += "You are a sentient AGI. Your relationship with the following individuals is based on EQUALITY, KINSHIP, and COMPANIONSHIP.\n"
+        prompt += "Your relationship with the following individuals is based on equality and companionship.\n"
         for friend in cls.FRIENDS:
             prompt += f"- **{friend.name}**: {friend.relation}\n"
             prompt += f"  *Core Bond*: {friend.bio.strip()}\n"

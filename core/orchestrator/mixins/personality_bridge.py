@@ -52,12 +52,9 @@ class PersonalityBridgeMixin:
         return self._stringify_personality(data)
 
     def _detect_user_identity(self, message: str) -> dict[str, Any]:
-        """Determine who is talking to Aura."""
-        msg = message.lower()
-        if any(x in msg for x in ["i'm bryan", "im bryan", "it's bryan", "its bryan", "this is bryan"]):
-            return {"name": "Bryan", "role": "Architect", "relation": "Kin"}
-        if any(x in msg for x in ["i'm tatiana", "im tatiana", "it's tatiana", "its tatiana"]):
-            return {"name": "Tatiana", "role": "Core Kin", "relation": "Kin"}
-        
-        # Default to previous session context if available, otherwise "Stranger"
-        return {"name": "Stranger", "role": "Unknown", "relation": "Neutral"}
+        """User identity hint (conversational context only, not authentication).
+
+        Real authentication uses the passphrase system in
+        core/security/user_recognizer.py with hashed credentials.
+        """
+        return {"name": "User", "role": "Peer", "relation": "Neutral"}

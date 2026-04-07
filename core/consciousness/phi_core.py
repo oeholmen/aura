@@ -44,13 +44,32 @@ logger = logging.getLogger("Aura.PhiCore")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-# The 8 named nodes of the LiquidSubstrate that form the conscious complex.
-# These correspond to LiquidSubstrate.idx_* values.
-COMPLEX_NODE_INDICES = [0, 1, 2, 3, 4, 5, 6, 7]  # valence, arousal, dominance, frustration, curiosity, energy, focus, +1
+# The 8 named nodes of the affect complex (derived from substrate state).
+# This is a summary-level complex — useful but is a proxy for internal dynamics.
+COMPLEX_NODE_INDICES = [0, 1, 2, 3, 4, 5, 6, 7]
 
 COMPLEX_NODE_NAMES = [
     "valence", "arousal", "dominance", "frustration",
-    "curiosity", "energy", "focus", "node_7"
+    "curiosity", "energy", "focus", "coherence"
+]
+
+# The 8 nodes of the computational complex (sampled from neural mesh executive tier).
+# These are actual computational units, not derived summaries.
+# Indices correspond to neurons in the executive tier (columns 44-63) of the 4096-neuron mesh.
+MESH_COMPLEX_INDICES = [
+    44 * 64 + 0,   # Executive column 44, neuron 0
+    46 * 64 + 16,  # Executive column 46, neuron 16
+    48 * 64 + 32,  # Executive column 48, neuron 32
+    50 * 64 + 48,  # Executive column 50, neuron 48
+    52 * 64 + 0,   # Executive column 52, neuron 0
+    54 * 64 + 16,  # Executive column 54, neuron 16
+    56 * 64 + 32,  # Executive column 56, neuron 32
+    58 * 64 + 48,  # Executive column 58, neuron 48
+]
+
+MESH_COMPLEX_NAMES = [
+    "exec_c44_n0", "exec_c46_n16", "exec_c48_n32", "exec_c50_n48",
+    "exec_c52_n0", "exec_c54_n16", "exec_c56_n32", "exec_c58_n48",
 ]
 
 N_NODES = len(COMPLEX_NODE_INDICES)       # 8
@@ -171,7 +190,16 @@ class PhiCore:
         self._surrogate_phi: float = 0.0
         self._last_surrogate_time: float = 0.0
         self._surrogate_interval_s: float = 5.0
-        self._norm_history: deque = deque(maxlen=20) # For trend analysis
+        self._norm_history: deque = deque(maxlen=20)
+
+        # Computational complex (neural mesh executive tier)
+        self._mesh_state_history: deque = deque(maxlen=2000)
+        self._mesh_node_history: List[deque] = [deque(maxlen=100) for _ in range(N_NODES)]
+        self._mesh_medians: np.ndarray = np.zeros(N_NODES, dtype=np.float32)
+        self._mesh_tpm: Optional[np.ndarray] = None
+        self._mesh_tpm_n_samples: int = 0
+        self._mesh_state_visits: np.ndarray = np.ones(N_STATES, dtype=np.float32)
+        self._mesh_last_result: Optional[PhiResult] = None
 
     # ── State Recording ────────────────────────────────────────────────────────
 
@@ -209,6 +237,95 @@ class PhiCore:
         # Record transition (we need consecutive pairs for the TPM)
         self._state_history.append(state_int)
         self._state_visits[state_int] += 1.0
+
+    def record_mesh_state(self, mesh_activations: np.ndarray):
+        """Record neural mesh activations for the computational complex.
+
+        Unlike record_state (which uses affect-derived values), this records
+        actual computational unit activations from the 4096-neuron mesh.
+        Computing IIT on these is NOT a proxy — it's measuring integration
+        of real computational dynamics.
+
+        Args:
+            mesh_activations: Full mesh activation vector (4096,)
+        """
+        if len(mesh_activations) < max(MESH_COMPLEX_INDICES) + 1:
+            return
+
+        x = mesh_activations[MESH_COMPLEX_INDICES]
+
+        for i, val in enumerate(x):
+            self._mesh_node_history[i].append(float(val))
+
+        for i in range(N_NODES):
+            if len(self._mesh_node_history[i]) >= 3:
+                self._mesh_medians[i] = float(np.median(list(self._mesh_node_history[i])))
+
+        binary = (x > self._mesh_medians).astype(int)
+        state_int = int(sum(b << i for i, b in enumerate(binary)))
+        self._mesh_state_history.append(state_int)
+        self._mesh_state_visits[state_int] += 1.0
+
+    def compute_mesh_phi(self) -> Optional[PhiResult]:
+        """Compute IIT on the neural mesh executive tier (computational complex).
+
+        This is the non-proxy computation: φ measured on actual computational
+        units, not on derived affect summaries.
+        """
+        if len(self._mesh_state_history) < 50:
+            return None
+
+        # Build TPM from mesh history
+        tpm = np.zeros((N_STATES, N_STATES), dtype=np.float64)
+        alpha = 0.01
+        transitions = 0
+        for i in range(len(self._mesh_state_history) - 1):
+            s = self._mesh_state_history[i]
+            s_next = self._mesh_state_history[i + 1]
+            tpm[s, s_next] += 1.0
+            transitions += 1
+
+        if transitions < 50:
+            return None
+
+        # Laplace smoothing + normalize
+        tpm += alpha
+        row_sums = tpm.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1.0
+        tpm /= row_sums
+
+        # Stationary distribution
+        p = self._mesh_state_visits / self._mesh_state_visits.sum()
+
+        # MIP search (same algorithm as affect complex)
+        min_phi = float("inf")
+        mip_partition = None
+        all_phis = []
+
+        for partition_mask, (part_a, part_b) in self._bipartitions:
+            phi_ab = self._phi_for_bipartition(tpm, p, part_a, part_b)
+            all_phis.append(phi_ab)
+            if phi_ab < min_phi:
+                min_phi = phi_ab
+                mip_partition = (part_a, part_b)
+
+        phi_s = float(max(0.0, min_phi)) if min_phi != float("inf") else 0.0
+
+        result = PhiResult(
+            phi_s=phi_s,
+            mip_partition_a=list(mip_partition[0]) if mip_partition else [],
+            mip_partition_b=list(mip_partition[1]) if mip_partition else [],
+            mip_phi_value=phi_s,
+            all_partition_phis=all_phis,
+            tpm_n_samples=transitions,
+        )
+        self._mesh_last_result = result
+
+        logger.info(
+            "PhiCore (mesh): φs=%.5f, complex=%s, MIP=%s (n=%d transitions)",
+            phi_s, result.is_complex, result.mip_description, transitions,
+        )
+        return result
 
     # ── TPM Construction ───────────────────────────────────────────────────────
 
