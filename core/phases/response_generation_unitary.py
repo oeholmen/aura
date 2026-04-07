@@ -1106,16 +1106,13 @@ class UnitaryResponsePhase(Phase):
 
         return ""
 
-    @classmethod
-    def _build_everyday_recovery_reply(cls, state: AuraState, objective: str) -> str:
+    def _build_everyday_recovery_reply(self, state: AuraState, objective: str) -> str:
         # Casual messages (greetings, thanks, small talk) should go through
         # the LLM with full cognitive context, not return templated responses.
         # Returning "" signals the caller to use the normal inference path.
         return ""
 
-    @classmethod
-    @classmethod
-    def _build_minimal_live_voice_reply(cls, state: AuraState) -> str:
+    def _build_minimal_live_voice_reply(self, state: AuraState) -> str:
         """Last-resort fallback when LLM inference timed out or failed.
 
         Returns a brief, honest acknowledgment rather than a template

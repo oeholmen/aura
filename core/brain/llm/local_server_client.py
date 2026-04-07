@@ -508,10 +508,16 @@ class LocalServerClient:
 
     async def _server_healthy(self) -> tuple[bool, bool]:
         client = await self._client()
+        
+        # Ollama and OpenAI compat often don't have a /health endpoint
+        health_path = "/" if self._backend == "ollama" else "/health"
+        
         try:
-            response = await client.get(f"{self._runtime_url}/health", timeout=5.0)
-            if response.status_code != 200:
-                return False, False
+            response = await client.get(f"{self._runtime_url}{health_path}", timeout=5.0)
+            if response.status_code not in (200, 404) if self._backend == "ollama" else (response.status_code != 200):
+                if not (self._backend == "ollama" and response.status_code == 200): # Ollama root returns 200
+                     if not (self._backend == "ollama" and health_path == "/"):
+                          return False, False
         except Exception:
             return False, False
 
